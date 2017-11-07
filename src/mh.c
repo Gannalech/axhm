@@ -66,7 +66,7 @@ void LoadGeomapFile(const char *fpath) {
 		char * lastmacaddr[17];
 		lastmacaddr[0] = '\0';
 		int n;
-		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) != EOF; n++) {
+		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
 			PDBG("[debug] %s %s\n", lampData[n].nome, lampData[n].macaddr);
 			if (strcmp(lastmacaddr, lampData[n].macaddr) > 0) {
 				ordered = false;
@@ -221,7 +221,7 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 					PDBG("\nMessaggio arrivato: %s-%s\n", pch[6], (char *) message->payload);
 					if (strncmp("QUIT", message->payload, 4) == 0) {
 						running = false;
-					} else if (strcmp("WAIT", message->payload) == 0) {
+					} else if (strcmp("OFF", message->payload) == 0) {
 						saveDelay = 0;
 						fputs("\nSospesa generazione KML\n", stderr);
 					} else {
@@ -229,9 +229,9 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 						if (val > 0) {
 							running = true;
 							saveDelay = val;
-							printf("\nNuovo intervallo aggiornamento KML: %d secondi\n", val);
+							printf("\nIntervallo aggiornamento KML: %d secondi\n", val);
 						} else {
-							printf("Comando sconosciuto: %s", message->payload);
+							printf("Comando sconosciuto: %s\n", message->payload);
 						}
 					}
 				}
@@ -265,7 +265,7 @@ int main(int argc, char *argv[]) {
 		saveDelay = parseArgument(argv[1]);
 	}
 	if (saveDelay == 0) {
-		puts("Impostato valore di default");
+		/* Imposta valore di default */
 		saveDelay = MIN_DELTA_SAVE;
 	}
 	printf("Periodo aggiornamento Heatmap.kml impostato a %.2f secondi\n", saveDelay);
