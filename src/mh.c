@@ -7,6 +7,7 @@
  *
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <mosquitto.h>
 #include "kmlgen.h"
@@ -61,7 +62,7 @@ unsigned int parseArgument(const char * arg) {
 
 void LoadGeomapFile(const char *fpath) {
 	FILE *fp;
-	if ((fp = fopen(fpath, "r+")) != NULL) {
+	if ((fp = fopen(fpath, "r")) != NULL) {
 		char * lastmacaddr[17];
 		lastmacaddr[0] = '\0';
 		int n;
