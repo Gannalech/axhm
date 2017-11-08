@@ -10,15 +10,16 @@
 #include <stdio.h>
 #include "kmlgen.h"
 #include "xmlwriter.h"
+#include <string.h>
 
-static const char* PLACEMARK = "Placemark";
-static const char* ID = "id";
-static const char* COORDINATES = "coordinates";
-static const char* POINT = "Point";
-static const char* DIMMER = "Dimmer";
-static const char* FOLDER = "Folder";
-static const char* NAME = "name";
-static const char* KML = "kml";
+static char* PLACEMARK = "Placemark";
+static char* ID = "id";
+static char* COORDINATES = "coordinates";
+static char* POINT = "Point";
+static char* DIMMER = "Dimmer";
+static char* FOLDER = "Folder";
+static char* NAME = "name";
+static char* KML = "kml";
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -48,30 +49,30 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData item[]) {
 	cTag(fp);
 
 	LampData it;
-	char dimmer[5];
 
 	/* VALORI LAMPADA */
 	for (i = 0; i < numItems; i++) {
 		it = item[i];
-		sprintf(dimmer, "%d", it.pw1);
-		aTag(fp, PLACEMARK);
-		aTagA(fp, ID, it.macaddr);
-		aTag(fp, NAME);
-		aText(fp, it.nome);
-		cTag(fp);
-		aTag(fp, DIMMER);
-		aText(fp, dimmer);
-		cTag(fp);
-		aTag(fp, POINT);
-		aTag(fp, COORDINATES);
-		aText(fp, it.coord1);
-		aText(fp, ",");
-		aText(fp, it.coord2);
-		aText(fp, ",");
-		aText(fp, it.coord3);
-		cTag(fp);
-		cTag(fp);
-		cTag(fp);
+		if (strlen(it.pw1) != 0) {
+			aTag(fp, PLACEMARK);
+			aTagA(fp, ID, it.macaddr);
+			aTag(fp, NAME);
+			aText(fp, it.nome);
+			cTag(fp);
+			aTag(fp, DIMMER);
+			aText(fp, it.pw1);
+			cTag(fp);
+			aTag(fp, POINT);
+			aTag(fp, COORDINATES);
+			aText(fp, it.coord1);
+			aText(fp, ",");
+			aText(fp, it.coord2);
+			aText(fp, ",");
+			aText(fp, it.coord3);
+			cTag(fp);
+			cTag(fp);
+			cTag(fp);
+		}
 	}
 	/* Chiusura tag aperti */
 	cTags(fp, 0);

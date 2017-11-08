@@ -68,6 +68,7 @@ void LoadGeomapFile(const char *fpath) {
 		lastmacaddr[0] = '\0';
 		int n;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
+			lampData[n].pw1[0] = '\0';
 			PDBG("[debug] %s %s\n", lampData[n].nome, lampData[n].macaddr);
 			if (strcmp(lastmacaddr, lampData[n].macaddr) > 0) {
 				ordered = false;
@@ -133,10 +134,10 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 			lamp = linsearch_macaddr(macaddr, lampData, numItems);
 		}
 		if (lamp != NULL) {
-			PDBG("[debug] Dimmer %s\n", power);
+			PDBG("[debug] Dimmer %s, old value %s\n", power, lamp->pw1);
 			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
 				strcpy(lamp->pw1, power);
-				updated = true;
+				updated = false;
 			}
 		}
 		pch += n;
