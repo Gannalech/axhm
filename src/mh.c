@@ -29,9 +29,9 @@ extern int numItems;
 bool ordered = true;
 
 time_t timeLastSaved;
-bool updated = false;
-bool running = true;
-double saveDelay;
+bool updated = false;  /* arrivata misura nuova rispetto al KML salvato se gia' creato */
+bool running = true; /* servizio in esecuzione */
+double saveDelay; /* pausa minima tra due salvataggi (in secondi); 0 = sospendi generazione KML */
 
 struct mosquitto *mosq = NULL;
 char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
@@ -223,7 +223,9 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 	}
 }
 
-int main2(int argc, char *argv[]) { /* TEST */
+/* TEST */
+/*
+int main2(int argc, char *argv[]) { 
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 	kmlInfo.autore = "mh-1.0.0";
@@ -238,6 +240,7 @@ int main2(int argc, char *argv[]) { /* TEST */
 	}
 	return 0;
 }
+*/
 
 /* Entry point */
 int main(int argc, char *argv[]) {
@@ -272,7 +275,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	mosquitto_loop_start(mosq);
-	running = true;
+	running = true; /* servizio in esecuzione */
 	updated = false;
 	timeLastSaved = 0;
 
@@ -282,7 +285,7 @@ int main(int argc, char *argv[]) {
 			timeLastSaved = time(NULL);
 			updated = true;
 		}
-		sleep(saveDelay);
+		sleep(saveDelay);  /* attesa minima */
 	}
 	mosquitto_disconnect(mosq);
 	mosquitto_loop_stop(mosq, false);
