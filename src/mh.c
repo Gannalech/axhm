@@ -3,7 +3,7 @@
  *
  *  Created on: 27 ott 2017
  *      Author: Flavio Bucceri
- *     Version: 1.1.1  (03 nov 2017)
+ *     Version: 1.0.0  (08 nov 2017)
  *
  */
 #include <stdio.h>
@@ -26,19 +26,19 @@ extern KMLInfo kmlInfo;
 extern LampData lampData[];
 extern int numItems;
 
-bool ordered = true;
-
 time_t timeLastSaved;
-bool updated = false;  /* arrivata misura nuova rispetto al KML salvato se gia' creato */
-bool running = true; /* servizio in esecuzione */
+bool updated = false; /* arrivata misura nuova rispetto al KML salvato se gia' creato */
+bool running = true; /* servizio MH in esecuzione */
 double saveDelay; /* pausa minima tra due salvataggi (in secondi); 0 = sospendi generazione KML */
 
 struct mosquitto *mosq = NULL;
-char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
-char *cmd_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
 char strMqttMsg[50000];
 
-/* Macro per il debug */
+/* topic */
+char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
+char *cmd_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
+
+/* Macro per i messaggi diagnostici */
 #define DEBUG
 #ifdef DEBUG
 #define PDBG(...) printf(__VA_ARGS__)
@@ -46,13 +46,21 @@ char strMqttMsg[50000];
 #define PDBG(...) /* NOP */
 #endif
 
+/**
+ * Funzione di confronto tra LampData, usata da qsort()
+ */
+int comp(const void * elem1, const void * elem2) {
+	char *f = ((LampData*) elem1)->macaddr;
+	char *s = ((LampData*) elem2)->macaddr;
+	return strcmp(f, s);
+}
 
 /**
  * Validates and parses a string as an integer
  * @param arg
  * @return
  */
-int parseArgument(char * arg) {
+int parseAsInteger(char * arg) {
 	int val;
 	if (sscanf(arg, "%d", &val) == 1) {
 		return val;
@@ -61,12 +69,17 @@ int parseArgument(char * arg) {
 	return 0;
 }
 
+/**
+ * Legge da disco il file Geomap con le anagrafiche delle lampade di interesse
+ */
 void LoadGeomapFile(const char *fpath) {
 	FILE *fp;
 	if ((fp = fopen(fpath, "r")) != NULL) {
+		/* XXX fare qsort senza controllare prima l'ordinamento? */
 		char lastmacaddr[17];
 		lastmacaddr[0] = '\0';
 		int n;
+		bool ordered = true;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
 			lampData[n].pw1[0] = '\0';
 			PDBG("[debug] %s %s\n", lampData[n].nome, lampData[n].macaddr);
@@ -75,31 +88,20 @@ void LoadGeomapFile(const char *fpath) {
 			}
 			strcpy(lastmacaddr, lampData[n].macaddr);
 		}
-		if (!ordered) {
-			PDBG("Avviso: voci in Geomap.txt non ordinate per mac address crescente\n");
-		}
 		numItems = n;
 		fclose(fp);
+		if (!ordered) {
+			qsort(lampData, numItems, sizeof(*lampData), comp);
+			PDBG("Le voci lette da Geomap.txt sono state riordinate per mac address crescente\n");
+		}
 	} else {
 		err(1, "File %s", fpath);
 	}
 }
 
-LampData *linsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
-	int i = n;
-	while (i != 0) {
-		PDBG("[debug] comparing with %s\n", lamp->macaddr);
-		if (strcmp(macaddr, lamp->macaddr) != 0) {
-			lamp++;
-			i--;
-		} else {
-			PDBG("[debug] found: %s\n", macaddr);
-			return lamp;
-		}
-	}
-	return NULL;
-}
-
+/**
+ * Ricerca binaria mediante puntatori per trovare un mac address
+ */
 LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 	int cond;
 	LampData *low = &lamp[0];
@@ -113,28 +115,27 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 		else if (cond > 0)
 			low = mid + 1;
 		else {
-			PDBG("[debug] found: %s", mid->macaddr);
+			PDBG("[debug] found: %s\n", mid->macaddr);
 			return mid;
 		}
 	}
 	return NULL;
 }
 
+/**
+ * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna il PW1
+ */
 void ReadDimmerFromMQTTMessage(char data[]) {
 	char macaddr[17], power[4];
 	int n;
 	const char *pch = data;
 	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^#!]%n", macaddr, power, &n) == 2) {
-		/* usa ricerca binaria sui macaddr se ordinati */
-		PDBG("[debug] Searching for: %s\n", macaddr);
+		/* usa ricerca binaria sui macaddr */
+		PDBG("[debug] Search for %s\n", macaddr);
 		LampData *lamp = NULL;
-		if (ordered) { /* TODO puntatore a funzione */
 			lamp = binsearch_macaddr(macaddr, lampData, numItems);
-		} else {
-			lamp = linsearch_macaddr(macaddr, lampData, numItems);
-		}
 		if (lamp != NULL) {
-			PDBG("[debug] Dimmer %s, old value %s\n", power, lamp->pw1);
+			PDBG("[debug] PW1 was '%s' now '%s'\n", lamp->pw1, power);
 			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
 				strcpy(lamp->pw1, power);
 				updated = false;
@@ -205,15 +206,18 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 					} else if (strcmp("OFF", message->payload) == 0) {
 						saveDelay = 0;
 						fputs("\nSospesa generazione KML\n", stderr);
+					} else if (strcmp("ON", message->payload) == 0) {
+						saveDelay = MIN_DELTA_SAVE;
+						fputs("\nSospesa generazione KML\n", stderr);
 					} else {
 						strcpy(strMqttMsg, message->payload);
-						int val = parseArgument(strMqttMsg);
+						int val = parseAsInteger(strMqttMsg);
 						if (val > 0) {
 							running = true;
 							saveDelay = val;
 							printf("\nIntervallo aggiornamento KML: %d secondi\n", val);
 						} else {
-							printf("Comando sconosciuto: %s\n", message->payload);
+							printf("Comando ignorato: %s\n", strMqttMsg);
 						}
 					}
 				}
@@ -225,14 +229,14 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 
 /* TEST */
 /*
-int main2(int argc, char *argv[]) { 
+int main(int argc, char *argv[]) {
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 	kmlInfo.autore = "mh-1.0.0";
 	kmlInfo.name = "MQTTHeatmap";
 	LoadGeomapFile("/www/Geomap.txt");
 	strcpy(strMqttMsg,
-			"#.#NMEAS;MAC00158D00011B9C7D;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#");
+			"#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#");
 	ReadDimmerFromMQTTMessage(strMqttMsg);
 	int i;
 	for (i = 0; i < numItems; i++) {
@@ -241,14 +245,13 @@ int main2(int argc, char *argv[]) {
 	return 0;
 }
 */
-
 /* Entry point */
 int main(int argc, char *argv[]) {
 	if (argc > 2) {
 		puts("Nota: i parametri in eccesso verranno ignorati.\n");
 	}
 	if (argc == 2) {
-		saveDelay = parseArgument(argv[1]);
+		saveDelay = parseAsInteger(argv[1]);
 	}
 	if (saveDelay == 0) {
 		/* Imposta valore di default */
@@ -275,7 +278,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	mosquitto_loop_start(mosq);
-	running = true; /* servizio in esecuzione */
+	running = true;
 	updated = false;
 	timeLastSaved = 0;
 
@@ -285,7 +288,7 @@ int main(int argc, char *argv[]) {
 			timeLastSaved = time(NULL);
 			updated = true;
 		}
-		sleep(saveDelay);  /* attesa minima */
+		sleep(saveDelay); /* attesa minima */
 	}
 	mosquitto_disconnect(mosq);
 	mosquitto_loop_stop(mosq, false);
