@@ -5,13 +5,15 @@ local.properties
 .loadpath
 .recommenders
 
-
 .cproject
 
 .worksheet
 
 *.o
+
 mh
 
 .env
+
+.vscode
 
