@@ -1,0 +1,1 @@
+mosquitto_sub -u admin -P admin -h localhost -p 1883 -t /axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/ -q 1
