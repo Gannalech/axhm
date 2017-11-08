@@ -13,6 +13,7 @@
 #include "kmlgen.h"
 #include "string.h"
 #include <errno.h>
+#include <err.h>
 #include <unistd.h>
 
 #define DEBUG
@@ -41,29 +42,23 @@ char *cmd_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c
 char strMqttMsg[50000];
 
 /**
- * Validates and parses a string as an unsigned integer
+ * Validates and parses a string as an integer
  * @param arg
  * @return
  */
-unsigned int parseArgument(const char * arg) {
-	char c;
+int parseArgument(char * arg) {
 	int val;
-	int n = 0;
-	while ((c = *(arg + n)) != '\0') {
-		if (c < '0' || c > '9') {
-			fprintf(stderr, "Formato inatteso del parametro: %s\n", arg);
-			return 0;
-		}
-		n++;
+	if (sscanf(arg, "%d", &val) == 1) {
+		return val;
 	}
-	val = atoi(arg);
-	return val;
+	fprintf(stderr, "Formato inatteso del parametro: %s\n", arg);
+	return 0;
 }
 
 void LoadGeomapFile(const char *fpath) {
 	FILE *fp;
 	if ((fp = fopen(fpath, "r")) != NULL) {
-		char * lastmacaddr[17];
+		char lastmacaddr[17];
 		lastmacaddr[0] = '\0';
 		int n;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
@@ -141,45 +136,17 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 		pch += n;
 	}
 }
-
-/*static const char* delim = "#.!\n\r";
- void ReadDimmerFromMQTTMessage2(char mqtt_message[]) {
- char* token, *macaddr, *pch;
- token = strtok(mqtt_message, delim);
- while (token != NULL) {
- fprintf(stderr, "\n[dbg]TOKEN=%s\n", token);
- macaddr = strstr(token, ";MAC") + 4;
- fprintf(stderr, "\n[dbg]MAC=%s\n", macaddr);
- pch = strchr(macaddr, ';');
- *pch = '\0';
- usa ricerca binaria sui macaddr se ordinati
- LampData *lamp;
- if (ordered) {  TODO puntatore a funzione
- lamp = binsearch_macaddr(macaddr, lampData, numItems);
- } else {
- lamp = linsearch_macaddr(macaddr, lampData, numItems);
- }
- if (lamp != NULL) {
- fprintf(stderr, "\nRicevuto %s\n", macaddr);
- macaddr = strstr(pch + 1, ";PW1") + 4;
- pch = strchr(macaddr, ';');
- *pch = '\0';
- unsigned int value = atoi(macaddr);
- if (lamp->pw1 != value) {
- lamp->pw1 = value;
- updated = true;
- }
- }
- }
- token = strtok(NULL, delim);
- }*/
-
+/**
+ * Callback per gestire i messaggi di log di mosquitto
+ */
 void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *str) {
 	/* Pring all log messages regardless of level. */
 	printf("%s\n", str);
 }
 
-/* Callback alla connessione che effettua iscrizione ai topic */
+/**
+ * Callback all'atto della connessione, effettua l'iscrizione ai topic
+ */
 void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
 	if (rc == 0) {
 		mosquitto_subscribe(mosq, NULL, axmj_in, 1); /* messaggi */
@@ -190,22 +157,29 @@ void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
 	fflush(stderr);
 }
 
+/**
+ * Callback per ogni iscrizione ai topic
+ */
 void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int qos_count, const int *granted_qos) {
 	int i;
-	printf("Subscribe: (mid: %d): %d", mid, granted_qos[0]);
+	printf("Subscribe (mid=%d) qos: %d", mid, granted_qos[0]);
 	for (i = 1; i < qos_count; i++) {
 		printf(", %d", granted_qos[i]);
 	}
-	fputc('\n', stderr);
-	fflush(stderr);
+	puts("\n");
+	fflush(stdout);
 }
 
+/**
+ * Callback per ogni messaggio ricevuto da mosquitto
+ */
 void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
 	int i = 1;
-	PDBG("%s <= %s\n", message->topic, (char *) message->payload);
+	PDBG("%s <= %s\n", message->topic, (char * ) message->payload);
 	char * pch[10];
 	pch[i] = strtok(message->topic, "/");
 	while (pch[i] != NULL) {
+		PDBG("%s\n", pch[i]);
 		i++;
 		pch[i] = strtok(NULL, "/");
 	}
@@ -214,18 +188,19 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 			if (strncmp(pch[4], "nde", 3) == 0) {
 				if (strncmp(pch[6], "axmj", 4) == 0) {
 					if (message->payload != NULL) {
-						strcpy(strMqttMsg, message->payload);
+						strncpy(strMqttMsg, message->payload, message->payloadlen);
 						ReadDimmerFromMQTTMessage(strMqttMsg);
 					}
 				} else if (strncmp(pch[6], "cmdin", 5) == 0) { /* FIXME convalida logica */
-					PDBG("\nMessaggio arrivato: %s-%s\n", pch[6], (char *) message->payload);
+					PDBG("\nMessaggio %s: %s\n", pch[6], (char * ) message->payload);
 					if (strncmp("QUIT", message->payload, 4) == 0) {
 						running = false;
 					} else if (strcmp("OFF", message->payload) == 0) {
 						saveDelay = 0;
 						fputs("\nSospesa generazione KML\n", stderr);
 					} else {
-						int val = parseArgument(message->payload);
+						strcpy(strMqttMsg, message->payload);
+						int val = parseArgument(strMqttMsg);
 						if (val > 0) {
 							running = true;
 							saveDelay = val;
@@ -257,6 +232,7 @@ int main2(int argc, char *argv[]) { /* TEST */
 	return 0;
 }
 
+/* Entry point */
 int main(int argc, char *argv[]) {
 	if (argc > 2) {
 		puts("Nota: i parametri in eccesso verranno ignorati.\n");
@@ -268,7 +244,7 @@ int main(int argc, char *argv[]) {
 		/* Imposta valore di default */
 		saveDelay = MIN_DELTA_SAVE;
 	}
-	printf("Periodo aggiornamento Heatmap.kml impostato a %.2f secondi\n", saveDelay);
+	printf("Periodo aggiornamento Heatmap.kml impostato a %.0f secondi\n", saveDelay);
 
 	kmlInfo.autore = "mh-1.0.0";
 	kmlInfo.name = "MQTTHeatmap";
