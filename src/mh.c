@@ -16,14 +16,11 @@
 #include <err.h>
 #include <unistd.h>
 
-#define DEBUG
-#ifdef DEBUG
-#define PDBG(...) printf(__VA_ARGS__)
-#else
-#define PDBG(...) /* NOP */
-#endif
+const char* host = "127.0.0.1";
+int port = 1883;
+int timeout_sec = 60;
 
-#define MIN_DELTA_SAVE 10.0
+#define MIN_DELTA_SAVE 10
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -40,6 +37,15 @@ struct mosquitto *mosq = NULL;
 char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
 char *cmd_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
 char strMqttMsg[50000];
+
+/* Macro per il debug */
+#define DEBUG
+#ifdef DEBUG
+#define PDBG(...) printf(__VA_ARGS__)
+#else
+#define PDBG(...) /* NOP */
+#endif
+
 
 /**
  * Validates and parses a string as an integer
@@ -260,7 +266,7 @@ int main(int argc, char *argv[]) {
 	mosquitto_message_callback_set(mosq, my_message_callback);
 	mosquitto_subscribe_callback_set(mosq, my_subscribe_callback);
 
-	if (mosquitto_connect(mosq, "127.0.0.1"/*host*/, 1883/*port*/, 60/*timeout_sec*/) != MOSQ_ERR_SUCCESS) {
+	if (mosquitto_connect(mosq, host, port, timeout_sec) != MOSQ_ERR_SUCCESS) {
 		err(1, "Mosquitto connect");
 	}
 
@@ -270,12 +276,12 @@ int main(int argc, char *argv[]) {
 	timeLastSaved = 0;
 
 	while (running) {
-		if (!updated && saveDelay != 0 && difftime(time(NULL), timeLastSaved) > saveDelay) {
+		if (!updated && saveDelay != 0 && difftime(time(NULL), timeLastSaved) >= saveDelay) {
 			WriteKMLFile("/mnt/sd/Heatmap.kml");
 			timeLastSaved = time(NULL);
 			updated = true;
 		}
-		sleep(1);
+		sleep(saveDelay);
 	}
 	mosquitto_disconnect(mosq);
 	mosquitto_loop_stop(mosq, false);
