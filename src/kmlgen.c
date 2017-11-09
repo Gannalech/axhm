@@ -27,7 +27,7 @@ extern int numItems;
 
 static int i;
 
-void write_kml(FILE* fp, KMLInfo* kml, LampData item[]) {
+void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	/* PREAMBOLO */
 	aTag(fp, KML);
 	aTagA(fp, "xmlns", "http://earth.google.com/kml/2.0");
