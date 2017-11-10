@@ -205,7 +205,7 @@ void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mo
 			} else if (strncmp("ON", payload, 2) == 0) {
 				saveDelay = MIN_DELTA_SAVE;
 				fputs("\nAttivata generazione KML\n", stdout);
-			} else if (strcmp("GETSTATUS", payload) == 0) {
+			} else if (strncmp("GETSTATUS", payload, 9) == 0) {
 				char *answer = (saveDelay == 0 ? "OFF\r\n" : "ON\r\n");
 				mosquitto_publish(mosq, NULL, cmd_out, strlen(answer), answer, 0, false);
 			} else { /* legge valore intero */
