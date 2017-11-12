@@ -4,7 +4,11 @@
  *  Created on: 27 ott 2017
  *      Author: Flavio Bucceri
  *     Version: 1.0.0  (08 nov 2017)
- *
+ */
+/**
+ * @file mh.c
+ * @author Flavio Bucceri
+ * @date 08 nov 2017
  *	Genera periodicamente un heatmap in formato KML di lampade con la loro potenza instantanea.
  *	Le anagrafiche sono lette da Geomap.txt, che stabilisce anche il perimetro di interesse.
  */
@@ -27,7 +31,7 @@ char *host = "127.0.0.1";
 int port = 1883;
 int timeout_sec = 60;
 
-#define MIN_DELTA_SAVE 10
+#define MIN_DELAY 10
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -36,8 +40,9 @@ extern int numItems;
 static volatile sig_atomic_t running = 1; /* modificato da SIGINT */
 
 time_t timeLastSaved;
-bool updated = false; /* arrivata misura nuova rispetto al KML salvato, se gia' creato */
-double saveDelay; /* pausa minima tra due salvataggi (in secondi); 0 = sospendi generazione KML */
+bool changed = true; /* arrivata misura nuova rispetto al KML salvato, se gia' creato */
+bool writekml = true;
+short saveDelay; /* pausa minima tra due salvataggi (in secondi); 0 = sospendi generazione KML */
 
 struct mosquitto *mosq = NULL;
 
@@ -46,7 +51,7 @@ char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-
 char *cmd_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
 char *cmd_out = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdout/";
 
-/* Macro per i messaggi diagnostici */
+/** Macro per i messaggi diagnostici */
 #define DEBUG
 #ifdef DEBUG
 #define PDBG(...) printf(__VA_ARGS__)
@@ -56,31 +61,34 @@ char *cmd_out = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-
 
 /**
  * Funzione di confronto tra LampData, usata da qsort()
- * @Autore Flavio
+ * @author Flavio
  */
-int comp(const void * elem1, const void * elem2) {
+static int comp(const void * elem1, const void * elem2) {
 	char *f = ((LampData*) elem1)->macaddr;
 	char *s = ((LampData*) elem2)->macaddr;
 	return strcmp(f, s);
 }
 
+static bool validateSaveDelay(unsigned int i) {
+	return (i > 0 && i < 3600);
+}
 /**
- * Validates and parses a string as an integer
- * @param arg
- * @return
+ * Parsa una stringa come int
+ * @param str Stringa da convertire
+ * @return Valore intero
  */
-int parseAsInteger(char * arg) {
+unsigned int parseAsInteger(char * str) {
 	int val;
-	if (sscanf(arg, "%d", &val) == 1) {
+	if (sscanf(str, "%u", &val) == 1) {
 		return val;
 	}
-	fprintf(stderr, "Formato inatteso del parametro: %s\n", arg);
+	fprintf(stderr, "Formato inatteso del parametro: %s\n", str);
 	return 0;
 }
 
 /**
  * Legge da disco il file Geomap con le anagrafiche delle lampade di interesse
- * Author: Flavio
+ * @author Flavio
  */
 void LoadGeomapFile(const char *fpath) {
 	FILE *fp;
@@ -110,7 +118,9 @@ void LoadGeomapFile(const char *fpath) {
 }
 
 /**
- * Ricerca binaria mediante puntatori per trovare un mac address
+ * Ricerca binaria mediante puntatori per trovare un mac address (fonte: K&R)
+ * @author Flavio
+ *
  */
 LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 	int cond;
@@ -134,6 +144,7 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 
 /**
  * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna il PW1
+ * @author Flavio
  */
 void ReadDimmerFromMQTTMessage(char data[]) {
 	char macaddr[17], power[4];
@@ -145,10 +156,10 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 		PDBG("[debug] Search for %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
 		if (lamp != NULL) {
-			PDBG("[debug] PW1 was '%s' now '%s'\n", lamp->pw1, power);
+			PDBG("[debug] PW1 di %s = '%s'(era '%s') \n", macaddr, power, lamp->pw1);
 			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
 				strcpy(lamp->pw1, power);
-				updated = false; /* va ricreato il file KML */
+				changed = true; /* va ricreato il file KML */
 			}
 		}
 		pch += n;
@@ -156,16 +167,18 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 }
 /**
  * Callback per gestire i messaggi di log di mosquitto
+ * @author Flavio
  */
-void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *str) {
+static void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *str) {
 	/* Pring all log messages regardless of level. */
 	printf("%s\n", str);
 }
 
 /**
  * Callback all'atto della connessione, effettua l'iscrizione ai topic
+ * @author Flavio
  */
-void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
+static void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
 	if (rc == 0) {
 		mosquitto_subscribe(mosq, NULL, axmj_in, 1); /* messaggi */
 		mosquitto_subscribe(mosq, NULL, cmd_in, 2); /* comandi */
@@ -177,8 +190,9 @@ void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
 
 /**
  * Callback per ogni iscrizione ai topic
+ * @author Flavio
  */
-void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int qos_count, const int *granted_qos) {
+static void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int qos_count, const int *granted_qos) {
 	int i;
 	printf("Subscribe mid %d; qos %d", mid, granted_qos[0]);
 	for (i = 1; i < qos_count; i++) {
@@ -190,35 +204,39 @@ void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int 
 
 /**
  * Callback per i messaggi ricevuti da mosquitto
+ * @author Flavio
  */
-void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
+static void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
 	if (message->payload != NULL) { /* serve? */
 		char *payload = (char *) message->payload;
-		if (strcmp(message->topic, axmj_in) == 0) {
-			PDBG("[DEBUG] Messaggio da axmj <= %s\n", payload);
+		char *pch = message->topic + 91;
+		/* confronto solo fine stringa usando aritmetica dei puntatori */
+		if (strcmp(pch, axmj_in + 91) == 0) {
+			PDBG("[debug] Messaggio da axmj <= %s\n", payload);
 			ReadDimmerFromMQTTMessage(payload);
-		} else if (strcmp(message->topic, cmd_in) == 0) {
-			PDBG("[DEBUG] Messaggio da cmdin <= %s\n", payload);
+		} else if (strcmp(pch, cmd_in + 91) == 0) {
+			PDBG("[debug] Messaggio da cmdin <= %s\n", payload);
 			if (strncmp("OFF", payload, 3) == 0) {
-				saveDelay = 0;
+				writekml = false;
 				fputs("\nSospesa generazione KML\n", stdout);
 			} else if (strncmp("ON", payload, 2) == 0) {
-				saveDelay = MIN_DELTA_SAVE;
+				writekml = true;
 				fputs("\nAttivata generazione KML\n", stdout);
 			} else if (strncmp("GETSTATUS", payload, 9) == 0) {
-				char *answer = (saveDelay == 0 ? "OFF\r\n" : "ON\r\n");
+				char * answer;
+				asprintf(&answer, (writekml ? "%u\r\n" : "OFF\r\n"), saveDelay);
 				mosquitto_publish(mosq, NULL, cmd_out, strlen(answer), answer, 0, false);
-			} else { /* legge valore intero */
-				int val = parseAsInteger(payload);
-				if (val > 0) {
+			} else { /* legge un valore intero */
+				unsigned int val = parseAsInteger(payload);
+				if (validateSaveDelay(val)) {
 					saveDelay = val;
-					printf("\nIntervallo aggiornamento KML: %d secondi\n", val);
+					printf("\nIntervallo aggiornamento KML: %u secondi\n", val);
 				} else {
 					printf("Comando ignorato: %s\n", payload);
 				}
 			}
 		} else {
-			PDBG("[DEBUG] Ignorato messaggio da %s <= %s\n", message->topic, payload);
+			PDBG("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
 		}
 	}
 	fflush(stdout);
@@ -243,6 +261,7 @@ void main2(int argc, char *argv[]) {
 
 /**
  * Gestisce un SIGINT (utente preme ctrl+C)
+ * @author Flavio
  * @param signo
  */
 static void sig_handler(int signo) {
@@ -257,11 +276,12 @@ int main(int argc, char *argv[]) {
 	if (argc == 2) {
 		saveDelay = parseAsInteger(argv[1]);
 	}
-	if (saveDelay == 0) {
+	if (!validateSaveDelay(saveDelay)) {
+		puts("Valore saveDelay non valido, uso default.\n");
 		/* Imposta valore di default */
-		saveDelay = MIN_DELTA_SAVE;
+		saveDelay = MIN_DELAY;
 	}
-	printf("Periodo aggiornamento Heatmap.kml impostato a %.0f secondi\n", saveDelay);
+	printf("Periodo aggiornamento Heatmap.kml impostato a %u secondi\n", saveDelay);
 
 	kmlInfo.autore = verid;
 	kmlInfo.name = id;
@@ -287,17 +307,17 @@ int main(int argc, char *argv[]) {
 	if (signal(SIGINT, sig_handler) == SIG_ERR) {
 		printf("Cannot catch SIGINT ...\n");
 	}
-	updated = false;
+	changed = true;
 	timeLastSaved = 0;
 
 	while (running) {
 		/* se ci sono misure nuove e scrittura kml e' attiva e tempo da ultimo salvataggio superiore a intervallo minimo in secondi */
-		if (!updated && saveDelay != 0 && difftime(time(NULL), timeLastSaved) >= saveDelay) {
+		if (changed && writekml && difftime(time(NULL), timeLastSaved) >= saveDelay) {
 			WriteKMLFile("/mnt/sd/Heatmap.kml");
 			timeLastSaved = time(NULL); /* timestamp attuale */
-			updated = true;
+			changed = false;
 		}
-		sleep(saveDelay); /* attesa minima tra due salvataggi */
+		sleep(saveDelay > MIN_DELAY ? MIN_DELAY : saveDelay); /* risponde ai comandi entro MIN_DELAY secondi */
 	}
 	mosquitto_disconnect(mosq);
 	mosquitto_loop_stop(mosq, false);

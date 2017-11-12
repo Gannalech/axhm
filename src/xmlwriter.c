@@ -4,11 +4,16 @@
  *   Creazione : 23 ott 2017
  *      Autore : Flavio Bucceri
  *    Versione : 1.1  (27 ott 2017)
- *
+ */
+
+/**
+ * @file xmlwriter.c
+ * @author Flavio Bucceri
+ * @date 27 ott 2017
  * Scrive su stream codice XML generato in modo incrementale.
  * Tipico ordine di chiamata delle funzioni: aTag, aTagA (opzionale), cText (opzionale), cTag.
  * In caso di errore nell'uso, genera un tag commento nell'XML a scopo diagnostico.
- * (Le "funzioni ausiliarie" andrebbero evitate perche' non permettono piu' di un attributo.)
+ * (Le "funzioni ausiliarie" non permettono piu' di un attributo.)
  */
 
 /* Includes */
@@ -28,6 +33,7 @@ static int isEmpty = TRUE; /* nodo vuoto */
  * Scrive un nuovo tag su stream e lo salva sullo stack lifo.
  * Se supera la dimensione statica dello stack mette un tag diagnostico nell'XML generato.
  * In quel caso occorre incrementare MAX_LIFO_INDEX e ricompilare il codice.
+ * @author Flavio
  **/
 void aTag(FILE *fp, char * name) {
 	if (isEmpty && top > 0) {
@@ -45,6 +51,8 @@ void aTag(FILE *fp, char * name) {
 
 /**
  * Scrive testo sullo stream, finalizzando eventuali tag pendenti
+ * @author Flavio
+ *
  * XXX varargs per concatenare testo?
  **/
 void aText(FILE *fp, char * text) {
@@ -58,6 +66,7 @@ void aText(FILE *fp, char * text) {
 /**
  * Chiude il tag corrente.
  * Scrive un tag diagnostico sullo stream se usata in un contesto errato.
+ * @author Flavio
  **/
 void cTag(FILE *fp) {
 	if (top > 0) {
@@ -78,6 +87,7 @@ void cTag(FILE *fp) {
 
 /**
  * Chiude i tag aperti fino al livello (k). Livello iniziale 0, nodo radice ha livello 1.
+ * @author Flavio
  **/
 void cTags(FILE *fp, int k) {
 	while (top > k) {
@@ -90,6 +100,7 @@ void cTags(FILE *fp, int k) {
 /**
  * Aggiunge un attributo al tag di apertura.
  * Scrive un tag diagnostico sullo stream se usata in un contesto errato.
+ * @author Flavio
  **/
 void aTagA(FILE *fp, char * name, char * value) {
 	if (!isEmpty) {
@@ -103,6 +114,7 @@ void aTagA(FILE *fp, char * name, char * value) {
 
 /**
  * Crea un tag con singolo attributo (funzione ausiliaria).
+ * @author Flavio
  **/
 void write_element_with_attribute(FILE *fp, char *ename, char *etext, char *aname, char *avalue) {
 	aTag(fp, ename);
@@ -114,6 +126,7 @@ void write_element_with_attribute(FILE *fp, char *ename, char *etext, char *anam
 
 /**
  * Crea un tag senza attributo (funzione ausiliaria).
+ * @author Flavio
  **/
 void write_element(FILE *fp, char *name, char *text) {
 	aTag(fp, name);
@@ -125,6 +138,7 @@ void write_element(FILE *fp, char *name, char *text) {
 /**
  * Chiude il tag attualmente aperto. Se non aperto scrive un tag
  * diagnostico di errore nell'XML generato
+ * @author Flavio
  **/
 void write_end_element(FILE *fp) {
 	cTag(fp);

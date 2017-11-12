@@ -5,7 +5,13 @@
  *      Author: Flavio Bucceri
  *     Version: 1.1  (27 ott 2017)
  *
- *  Genera un xml in formato KML
+ *  Genera un xml nel formato KML
+ */
+/**
+ * @file kmlgen.c
+ * @author Flavio Bucceri
+ * @date 27 ott 2017
+ * Genera un xml nel formato KML
  */
 #include <stdio.h>
 #include "kmlgen.h"
@@ -26,7 +32,13 @@ extern LampData lampData[];
 extern int numItems;
 
 static int i;
-
+/**
+ * Scrive su stream il codice KML
+ * @author Flavio
+ * @param fp stream su cui scrivere
+ * @param kml dati per il preambolo
+ * @param item array dei dati delle lampade
+ */
 void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	/* PREAMBOLO */
 	aTag(fp, KML);
@@ -78,6 +90,12 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	cTags(fp, 0);
 }
 
+/**
+ * Scrive su disco il file KML
+ * @author Flavio
+ * @param fname Nome del file completo di path
+ * @return Esito operazione
+ */
 int WriteKMLFile(char* fname) {
 	FILE *fp = fopen(fname, "w");
 	if (fp == NULL) {
