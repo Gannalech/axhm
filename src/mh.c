@@ -224,7 +224,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				fputs("\nAttivata generazione KML\n", stdout);
 			} else if (strncmp("GETSTATUS", payload, 9) == 0) {
 				char * answer;
-				asprintf(&answer, (writekml ? "%u\r\n" : "OFF\r\n"), saveDelay);
+				asprintf(&answer, (writekml ? "ON:%u\r\n" : "OFF\r\n"), saveDelay);
 				mosquitto_publish(mosq, NULL, cmd_out, strlen(answer), answer, 0, false);
 			} else { /* legge un valore intero */
 				unsigned int val = parseAsInteger(payload);
