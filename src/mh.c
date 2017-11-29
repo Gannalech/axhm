@@ -54,9 +54,9 @@ char *cmd_out = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-
 /** Macro per i messaggi diagnostici */
 #define DEBUG
 #ifdef DEBUG
-#define PDBG(...) printf(__VA_ARGS__)
+#define Log(...) printf(__VA_ARGS__)
 #else
-#define PDBG(...) /* NOP */
+#define Log(...) /* NOP */
 #endif
 
 /**
@@ -100,7 +100,7 @@ void LoadGeomapFile(const char *fpath) {
 		bool ordered = true;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
 			lampData[n].pw1[0] = '\0';
-			PDBG("[debug] %s %s\n", lampData[n].nome, lampData[n].macaddr);
+			Log("[debug] %s %s\n", lampData[n].nome, lampData[n].macaddr);
 			if (strcmp(lastmacaddr, lampData[n].macaddr) > 0) {
 				ordered = false;
 			}
@@ -110,7 +110,7 @@ void LoadGeomapFile(const char *fpath) {
 		fclose(fp);
 		if (!ordered) {
 			qsort(lampData, numItems, sizeof(*lampData), comp);
-			PDBG("Le voci lette da Geomap.txt sono state riordinate per mac address crescente\n");
+			Log("Le voci lette da Geomap.txt sono state riordinate per mac address crescente\n");
 		}
 	} else {
 		err(EXIT_FAILURE, "File Geomap mancante: %s", fpath);
@@ -130,12 +130,14 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 
 	while (low < high) {
 		mid = low + (high - low) / 2;
-		if ((cond = strcmp(macaddr, mid->macaddr)) < 0)
+		if ((cond = strcmp(macaddr, mid->macaddr)) < 0) {
+			Log("[debug] %s < %s\n", macaddr, mid->macaddr);
 			high = mid;
-		else if (cond > 0)
+		} else if (cond > 0) {
+			Log("[debug] %s > %s\n", macaddr, mid->macaddr);
 			low = mid + 1;
-		else {
-			PDBG("[debug] found: %s\n", mid->macaddr);
+		} else {
+			Log("[debug] found: %s\n", mid->macaddr);
 			return mid;
 		}
 	}
@@ -153,10 +155,10 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1; n = caratteri letti */
 	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^#!]%n", macaddr, power, &n) == 2) {
 		/* usa ricerca binaria sui macaddr */
-		PDBG("[debug] Search for %s\n", macaddr);
+		Log("[debug] Search for %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
 		if (lamp != NULL) {
-			PDBG("[debug] PW1 di %s = '%s'(era '%s') \n", macaddr, power, lamp->pw1);
+			Log("[debug] PW1 di %s = '%s'(era '%s') \n", macaddr, power, lamp->pw1);
 			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
 				strcpy(lamp->pw1, power);
 				changed = true; /* va ricreato il file KML */
@@ -212,10 +214,10 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 		char *pch = message->topic + 91;
 		/* confronto solo fine stringa usando aritmetica dei puntatori */
 		if (strcmp(pch, axmj_in + 91) == 0) {
-			PDBG("[debug] Messaggio da axmj <= %s\n", payload);
+			Log("[debug] Messaggio da axmj <= %s\n", payload);
 			ReadDimmerFromMQTTMessage(payload);
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
-			PDBG("[debug] Messaggio da cmdin <= %s\n", payload);
+			Log("[debug] Messaggio da cmdin <= %s\n", payload);
 			if (strncmp("OFF", payload, 3) == 0) {
 				writekml = false;
 				fputs("\nSospesa generazione KML\n", stdout);
@@ -236,7 +238,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				}
 			}
 		} else {
-			PDBG("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
+			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
 		}
 	}
 	fflush(stdout);
@@ -260,7 +262,7 @@ void main2(int argc, char *argv[]) {
 }
 
 /**
- * Gestisce un SIGINT (utente preme ctrl+C)
+ * Gestisce un segnale di interrupt
  * @author Flavio
  * @param signo
  */
@@ -303,9 +305,12 @@ int main(int argc, char *argv[]) {
 
 	mosquitto_loop_start(mosq);
 
-	/* abilita cattura SIGINT (ctrl+C) */
+	/* abilita cattura SIGINT (ctrl+C) e SIGTERM (kill -p) */
 	if (signal(SIGINT, sig_handler) == SIG_ERR) {
 		printf("Cannot catch SIGINT ...\n");
+	}
+	if (signal(SIGTERM, sig_handler) == SIG_ERR) {
+		printf("Cannot catch SIGTERM ...\n");
 	}
 	changed = true;
 	timeLastSaved = 0;
