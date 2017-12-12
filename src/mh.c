@@ -3,13 +3,13 @@
  *
  *  Created on: 27 ott 2017
  *      Author: Flavio Bucceri
- *     Version: 1.0.0  (08 nov 2017)
+ *     Version: 1.1.0  (12 dic 2017)
  */
 /**
  * @file mh.c
  * @author Flavio Bucceri
  * @date 08 nov 2017
- *	Genera periodicamente un heatmap in formato KML di lampade con la loro potenza instantanea.
+ *	Genera periodicamente un heatmap in formato KML di lampade con la loro potenza instantanea e conteggio variazioni di stato del PIR.
  *	Le anagrafiche sono lette da Geomap.txt, che stabilisce anche il perimetro di interesse.
  */
 #include <stdio.h>
@@ -24,13 +24,14 @@
 #include <signal.h>
 
 char *id = "MQTTHeatmap";
-char *verid = "mh-1.0.0"; /* aggiornare se necessario */
+char *verid = "mh-1.1.0"; /* aggiornare se necessario */
 
 /* valori di default */
 char *host = "127.0.0.1";
 int port = 1883;
 int timeout_sec = 60;
 
+#define PIR_JITTER 50
 #define MIN_DELAY 10
 
 extern KMLInfo kmlInfo;
@@ -69,9 +70,15 @@ static int comp(const void * elem1, const void * elem2) {
 	return strcmp(f, s);
 }
 
+/**
+ * Verifica se il saveDelay ha un valore ammesso (1 sec.. 1 ora)
+ * @param i
+ * @return
+ */
 static bool validateSaveDelay(unsigned int i) {
 	return (i > 0 && i < 3600);
 }
+
 /**
  * Parsa una stringa come int
  * @param str Stringa da convertire
@@ -105,6 +112,9 @@ void LoadGeomapFile(const char *fpath) {
 				ordered = false;
 			}
 			strcpy(lastmacaddr, lampData[n].macaddr);
+			strcpy(lampData[n].pir, "0"); /* valore iniziale */
+			lampData[n].pir_change_count = 0;
+			lampData[n].pir_delta_sign = 1;
 		}
 		numItems = n;
 		fclose(fp);
@@ -149,11 +159,13 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
  * @author Flavio
  */
 void ReadDimmerFromMQTTMessage(char data[]) {
-	char macaddr[17], power[4];
+	char macaddr[17], power[4], pir[4];
 	int n;
 	const char *pch = data;
-	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1; n = caratteri letti */
-	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^#!]%n", macaddr, power, &n) == 2) {
+	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e PIR; n = caratteri letti */
+	/* FIXME */
+	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%[^;];%*[^#!]%n", macaddr, power, pir,
+			&n) == 3) {
 		/* usa ricerca binaria sui macaddr */
 		Log("[debug] Search for %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
@@ -163,10 +175,22 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 				strcpy(lamp->pw1, power);
 				changed = true; /* va ricreato il file KML */
 			}
+
+			Log("[debug] PIR di %s = '%s'(era '%s') \n", macaddr, pir, lamp->pir);
+			unsigned int x = parseAsInteger(pir);
+			unsigned int x0 = parseAsInteger(lamp->pir);
+			strcpy(lamp->pir, pir);
+			if (lamp->pir_delta_sign * (x - x0) > PIR_JITTER) { /* variazione PIR sopra soglia */
+				Log("[debug] PIR di %s fa scattare contatore (*%d): delta %u\n", macaddr, lamp->pir_delta_sign, x - x0);
+				lamp->pir_change_count++;
+				lamp->pir_delta_sign = -lamp->pir_delta_sign;
+				changed = true; /* va ricreato il file KML */
+			}
 		}
 		pch += n;
 	}
 }
+
 /**
  * Callback per gestire i messaggi di log di mosquitto
  * @author Flavio
