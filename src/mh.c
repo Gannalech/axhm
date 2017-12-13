@@ -24,26 +24,28 @@
 #include <signal.h>
 
 char *id = "MQTTHeatmap";
-char *verid = "mh-1.1.0"; /* aggiornare se necessario */
+char *verid = "mh-1.1.0";
+
+#define PIR_JITTER 50
+#define MIN_DELAY 10
 
 /* valori di default */
 char *host = "127.0.0.1";
 int port = 1883;
 int timeout_sec = 60;
-
-#define PIR_JITTER 50
-#define MIN_DELAY 10
+static char *HeatmapFilePath = "/mnt/sd/Heatmap.kml";
+static char *GeomapFilePath = "/www/Geomap.txt";
+unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
 extern int numItems;
 
-static volatile sig_atomic_t running = 1; /* modificato da SIGINT */
+static volatile sig_atomic_t running = 1;
 
 time_t timeLastSaved;
 bool changed = true; /* arrivata misura nuova rispetto al KML salvato, se gia' creato */
-bool writekml = true;
-short saveDelay; /* pausa minima tra due salvataggi (in secondi); 0 = sospendi generazione KML */
+bool writekml = true; /* scrive su disco il KML */
 
 struct mosquitto *mosq = NULL;
 
@@ -163,7 +165,6 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 	int n;
 	const char *pch = data;
 	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e PIR; n = caratteri letti */
-	/* FIXME */
 	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%[^;];%*[^#!]%n", macaddr, power, pir,
 			&n) == 3) {
 		/* usa ricerca binaria sui macaddr */
@@ -181,7 +182,7 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 			unsigned int x0 = parseAsInteger(lamp->pir);
 			strcpy(lamp->pir, pir);
 			if (lamp->pir_delta_sign * (x - x0) > PIR_JITTER) { /* variazione PIR sopra soglia */
-				Log("[debug] PIR di %s fa scattare contatore (*%d): delta %u\n", macaddr, lamp->pir_delta_sign, x - x0);
+				Log("[debug] PIR di %s fa scattare contatore (%d): delta %u\n", macaddr, lamp->pir_delta_sign, x - x0);
 				lamp->pir_change_count++;
 				lamp->pir_delta_sign = -lamp->pir_delta_sign;
 				changed = true; /* va ricreato il file KML */
@@ -235,8 +236,7 @@ static void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mi
 static void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
 	if (message->payload != NULL) { /* serve? */
 		char *payload = (char *) message->payload;
-		char *pch = message->topic + 91;
-		/* confronto solo fine stringa usando aritmetica dei puntatori */
+		char *pch = message->topic + 91; /* confronto solo parte finale stringa usando aritmetica dei puntatori */
 		if (strcmp(pch, axmj_in + 91) == 0) {
 			Log("[debug] Messaggio da axmj <= %s\n", payload);
 			ReadDimmerFromMQTTMessage(payload);
@@ -277,7 +277,7 @@ void main2(int argc, char *argv[]) {
 			"#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
 	kmlInfo.autore = verid;
 	kmlInfo.name = "MQTTHeatmap-test";
-	LoadGeomapFile("/www/Geomap.txt");
+	LoadGeomapFile(GeomapFilePath);
 	ReadDimmerFromMQTTMessage(strMqttMsg);
 	int i;
 	for (i = 0; i < numItems; i++) {
@@ -286,7 +286,7 @@ void main2(int argc, char *argv[]) {
 }
 
 /**
- * Gestisce un segnale di interrupt
+ * Gestisce un segnale di interrupt. Deve contenere solo operazioni indivisibili.
  * @author Flavio
  * @param signo
  */
@@ -294,29 +294,72 @@ static void sig_handler(int signo) {
 	running = 0; /* operazione atomica, per evitare deadlock */
 }
 
+/**
+ * Legge parametri da riga di comando. Sintassi non-standard per semplicita'.
+ * Un solo carattere, poi un separatore (non usare lo spazio) ed il valore.
+ * Parametri non validi vengono ignorati, si usa il valore di default.
+ * Non controlla esistenza parametri duplicati.
+ * @param argc
+ * @param argv
+ * @author Flavio
+ */
+void parseArguments(int argc, char *argv[]) {
+	int i;
+	for (i = 1; i < argc; i++) {
+		char * value = argv[i];
+		if (strlen(value) > 1) {
+			value = value + 2;
+		}
+		/* si aspetta un formato tipo "x:valore" */
+		switch (argv[i][0]) {
+		case '?':
+			puts("Parametri:  h(ost) p(orta) t(imeout) i(nput_geomap) o(utput_heatmap) r(efresh_sec) ?(aiuto)");
+			puts("Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
+			printf("Es: %s h:%s p:%d t:%d i:%s o:%s r:%d\n", argv[0], host, port, timeout_sec, GeomapFilePath, HeatmapFilePath, saveDelay);
+			exit(EXIT_SUCCESS);
+			break;
+		case 'h':
+			/* TODO validazione: IP o nome dominio? */
+			host = value;
+			break;
+		case 'i':
+			GeomapFilePath = value;
+			break;
+		case 'o':
+			HeatmapFilePath = value;
+			break;
+		case 'p':
+			port = parseAsInteger(value);
+			break;
+		case 't':
+			timeout_sec = parseAsInteger(value);
+			break;
+		case 'r':
+			saveDelay = parseAsInteger(value);
+			if (!validateSaveDelay(saveDelay)) {
+				puts("Valore saveDelay non valido, uso default.\n");
+				saveDelay = MIN_DELAY;
+			}
+			break;
+		default:
+			printf("Parametro sconosciuto: %s\n", argv[i]);
+		}
+	}
+}
+
 /* Entry point */
 int main(int argc, char *argv[]) {
-	if (argc > 2) {
-		puts("Nota: i parametri in eccesso verranno ignorati.\n");
-	}
-	if (argc == 2) {
-		saveDelay = parseAsInteger(argv[1]);
-	}
-	if (!validateSaveDelay(saveDelay)) {
-		puts("Valore saveDelay non valido, uso default.\n");
-		/* Imposta valore di default */
-		saveDelay = MIN_DELAY;
-	}
-	printf("Periodo aggiornamento Heatmap.kml impostato a %u secondi\n", saveDelay);
+	parseArguments(argc, argv);
+	printf("KML aggiornato ogni %u secondi (se sono presenti valori nuovi)\n", saveDelay);
 
 	kmlInfo.autore = verid;
 	kmlInfo.name = id;
-	LoadGeomapFile("/www/Geomap.txt");
+	LoadGeomapFile(GeomapFilePath);
 
 	mosquitto_lib_init();
 
 	if (!(mosq = mosquitto_new(id, true/*clean_session*/, NULL))) {
-		err(EXIT_FAILURE, "Mosquitto_new");
+		err(EXIT_FAILURE, "Mosquitto_new failed");
 	}
 	mosquitto_log_callback_set(mosq, my_log_callback);
 	mosquitto_connect_callback_set(mosq, my_connect_callback);
@@ -324,7 +367,7 @@ int main(int argc, char *argv[]) {
 	mosquitto_subscribe_callback_set(mosq, my_subscribe_callback);
 
 	if (mosquitto_connect(mosq, host, port, timeout_sec) != MOSQ_ERR_SUCCESS) {
-		err(EXIT_FAILURE, "Mosquitto_connect");
+		err(EXIT_FAILURE, "Mosquitto_connect failed");
 	}
 
 	mosquitto_loop_start(mosq);
@@ -342,16 +385,16 @@ int main(int argc, char *argv[]) {
 	while (running) {
 		/* se ci sono misure nuove e scrittura kml e' attiva e tempo da ultimo salvataggio superiore a intervallo minimo in secondi */
 		if (changed && writekml && difftime(time(NULL), timeLastSaved) >= saveDelay) {
-			WriteKMLFile("/mnt/sd/Heatmap.kml");
-			timeLastSaved = time(NULL); /* timestamp attuale */
+			WriteKMLFile(HeatmapFilePath);
+			timeLastSaved = time(NULL); /* istante attuale */
 			changed = false;
 		}
-		sleep(saveDelay > MIN_DELAY ? MIN_DELAY : saveDelay); /* risponde ai comandi entro MIN_DELAY secondi */
+		sleep(saveDelay > MIN_DELAY ? MIN_DELAY : saveDelay); /* reagisce ai comandi ricevuti da cmd_in non oltre MIN_DELAY secondi */
 	}
 	mosquitto_disconnect(mosq);
 	mosquitto_loop_stop(mosq, false);
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
-	puts("Servizio MH interrotto.");
+	printf("Servizio %s interrotto.", argv[0]);
 	return 0;
 }

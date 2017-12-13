@@ -18,7 +18,7 @@
 #include "xmlwriter.h"
 #include <string.h>
 
-static char* PIR_SWITCHING = "PIR-Count";
+static char* PIR_COUNT = "PIR-Count";
 static char* PLACEMARK = "Placemark";
 static char* ID = "id";
 static char* COORDINATES = "coordinates";
@@ -76,7 +76,7 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 			aTag(fp, DIMMER);
 			aText(fp, it.pw1);
 			cTag(fp);
-			aTag(fp, PIR_SWITCHING);
+			aTag(fp, PIR_COUNT);
 			sprintf(str, "%d", it.pir_change_count);
 			aText(fp, str);
 			cTag(fp);
