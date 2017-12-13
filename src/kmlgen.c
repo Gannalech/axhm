@@ -18,12 +18,13 @@
 #include "xmlwriter.h"
 #include <string.h>
 
-static char* PIR_COUNT = "PIR-Count";
+static char* EXTENDED_DATA = "ExtendedData";
+static char* DATA = "Data";
+static char* VALUE = "value";
 static char* PLACEMARK = "Placemark";
 static char* ID = "id";
 static char* COORDINATES = "coordinates";
 static char* POINT = "Point";
-static char* DIMMER = "Dimmer";
 static char* FOLDER = "Folder";
 static char* NAME = "name";
 static char* KML = "kml";
@@ -34,7 +35,7 @@ extern int numItems;
 
 static int i;
 /**
- * Scrive su stream il codice KML
+ * Scrive su stream il codice KML 2.2
  * @author Flavio
  * @param fp stream su cui scrivere
  * @param kml dati per il preambolo
@@ -43,7 +44,7 @@ static int i;
 void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	/* PREAMBOLO */
 	aTag(fp, KML);
-	aTagA(fp, "xmlns", "http://earth.google.com/kml/2.0");
+	aTagA(fp, "xmlns", "http://www.opengis.net/kml/2.2");
 	aTagA(fp, "xmlns:atom", "http://www.w3.org/2005/Atom");
 	aTag(fp, "Document");
 
@@ -59,6 +60,7 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	/*aTag(fp,"atom:link"); aTagA(fp,"href","http://www.allix.it"); cTag(fp);*/
 	aTag(fp, FOLDER);
 	aTag(fp, NAME);
+	aText(fp, "Luci");
 	cTag(fp);
 
 	LampData it;
@@ -73,13 +75,23 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 			aTag(fp, NAME);
 			aText(fp, it.nome);
 			cTag(fp);
-			aTag(fp, DIMMER);
+
+			aTag(fp, EXTENDED_DATA);
+			aTag(fp, DATA);
+			aTagA(fp, NAME, "Dimmer");
+			aTag(fp, VALUE);
 			aText(fp, it.pw1);
 			cTag(fp);
-			aTag(fp, PIR_COUNT);
-			sprintf(str, "%d", it.pir_change_count);
+			cTag(fp);
+			aTag(fp, DATA);
+			aTagA(fp, NAME, "PIR-Count");
+			sprintf(str, "%u", it.pir_change_count);
+			aTag(fp, VALUE);
 			aText(fp, str);
 			cTag(fp);
+			cTag(fp);
+			cTag(fp);
+
 			aTag(fp, POINT);
 			aTag(fp, COORDINATES);
 			aText(fp, it.coord1);
@@ -115,29 +127,29 @@ int WriteKMLFile(char* fname) {
 
 /* INIZIO CODICE DI TEST */
 /*
- // Parametro opzionale a riga di comando: il nome del file kml
- int main(int argc, char* argv[]) {
- // Autoflush Eclipse CPP buffered output to see it during debug (workaround)
- setvbuf(stdout, NULL, _IONBF, 0);
- //setvbuf(stderr, NULL, _IONBF, 0);
+// Parametro opzionale a riga di comando: il nome del file kml
+int main(int argc, char* argv[]) {
+	// Autoflush Eclipse CPP buffered output to see it during debug (workaround)
+	setvbuf(stdout, NULL, _IONBF, 0);
+	//setvbuf(stderr, NULL, _IONBF, 0);
 
- KMLInfo kmlInfo = { "Heatmap", "MH" };
- numItems = 3;
- LampData lampData[] = { { "00158D0000EB5ECE", "nomelamp1", 0, "1.1", "2.0", "0" }, { "00158D0000EB5ECE", "nomelamp2", 50, "1", "2", "3" }, { "00158D0000EB3EF2", "nomelamp3", 1000, "1", "2", "3" } };
- write_kml(stdout, &kmlInfo, lampData);
+	KMLInfo kmlInfo = { "Heatmap", "MH" };
+	numItems = 3;
+	LampData lampData[] = { { "00158D0000EB5ECE", "nomelamp1", "0", "2", +1, 0, "1.1", "2.0", "0" }, { "00158D0000EB5ECE", "nomelamp2", "50", "2", +1, 0, "1", "2", "3" }, { "00158D0000EB3EF2", "nomelamp3", "1000", "2", +1, 0, "1", "2", "3" } };
+	write_kml(stdout, &kmlInfo, lampData);
 
- // default if filename not specified at command line
- char* fname = (argc == 2 ? argv[1] : "heatmap_kml.xml");
+	// default if filename not specified at command line
+	char* fname = (argc == 2 ? argv[1] : "heatmap_kml.xml");
 
- FILE *fp = fopen(fname, "w");
- if (fp == NULL) {
- fprintf(stderr, "Error opening file: %s\n", fname);
- return 1;
- }
+	FILE *fp = fopen(fname, "w");
+	if (fp == NULL) {
+		fprintf(stderr, "Error opening file: %s\n", fname);
+		return 1;
+	}
 
- write_kml(fp, &kmlInfo, lampData);
- fclose(fp);
- return 0;
- }
- */
+	write_kml(fp, &kmlInfo, lampData);
+	fclose(fp);
+	return 0;
+}
+*/
 /* FINE CODICE DI TEST */

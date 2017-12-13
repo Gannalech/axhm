@@ -9,7 +9,7 @@
  * @file mh.c
  * @author Flavio Bucceri
  * @date 08 nov 2017
- *	Genera periodicamente un heatmap in formato KML di lampade con la loro potenza instantanea e conteggio variazioni di stato del PIR.
+ *	Genera periodicamente un heatmap in formato KML di lampade con loro potenza instantanea e conteggio variazioni di stato del PIR.
  *	Le anagrafiche sono lette da Geomap.txt, che stabilisce anche il perimetro di interesse.
  */
 #include <stdio.h>
@@ -36,6 +36,7 @@ int timeout_sec = 60;
 static char *HeatmapFilePath = "/mnt/sd/Heatmap.kml";
 static char *GeomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
+unsigned int pirJitter = PIR_JITTER; /* variazione segnale ammessa senza cambio stato PIR */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -97,6 +98,7 @@ unsigned int parseAsInteger(char * str) {
 
 /**
  * Legge da disco il file Geomap con le anagrafiche delle lampade di interesse
+ * Ordina alfanumericamente per mac address se necessario
  * @author Flavio
  */
 void LoadGeomapFile(const char *fpath) {
@@ -109,7 +111,7 @@ void LoadGeomapFile(const char *fpath) {
 		bool ordered = true;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
 			lampData[n].pw1[0] = '\0';
-			Log("[debug] %s %s\n", lampData[n].nome, lampData[n].macaddr);
+			Log("[debug] %s %s\n", lampData[n].macaddr, lampData[n].nome);
 			if (strcmp(lastmacaddr, lampData[n].macaddr) > 0) {
 				ordered = false;
 			}
@@ -122,7 +124,7 @@ void LoadGeomapFile(const char *fpath) {
 		fclose(fp);
 		if (!ordered) {
 			qsort(lampData, numItems, sizeof(*lampData), comp);
-			Log("Le voci lette da Geomap.txt sono state riordinate per mac address crescente\n");
+			Log("Voci da Geomap.txt riordinate per mac address crescente\n");
 		}
 	} else {
 		err(EXIT_FAILURE, "File Geomap mancante: %s", fpath);
@@ -269,21 +271,23 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 }
 
 /* TEST */
-void main2(int argc, char *argv[]) {
-	/* Evita problemi con stdout/stderr durante debug interattivo */
-	setvbuf(stdout, NULL, _IONBF, 0);
-	setvbuf(stderr, NULL, _IONBF, 0);
-	char strMqttMsg[50000] =
-			"#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
-	kmlInfo.autore = verid;
-	kmlInfo.name = "MQTTHeatmap-test";
-	LoadGeomapFile(GeomapFilePath);
-	ReadDimmerFromMQTTMessage(strMqttMsg);
-	int i;
-	for (i = 0; i < numItems; i++) {
-		printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
-	}
-}
+/*
+ void main2(int argc, char *argv[]) {
+ // Evita problemi con stdout/stderr durante debug interattivo
+ setvbuf(stdout, NULL, _IONBF, 0);
+ setvbuf(stderr, NULL, _IONBF, 0);
+ char strMqttMsg[50000] =
+ "#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
+ kmlInfo.autore = verid;
+ kmlInfo.name = "MQTTHeatmap-test";
+ LoadGeomapFile(GeomapFilePath);
+ ReadDimmerFromMQTTMessage(strMqttMsg);
+ int i;
+ for (i = 0; i < numItems; i++) {
+ printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
+ }
+ }
+ */
 
 /**
  * Gestisce un segnale di interrupt. Deve contenere solo operazioni indivisibili.
@@ -295,27 +299,24 @@ static void sig_handler(int signo) {
 }
 
 /**
- * Legge parametri da riga di comando. Sintassi non-standard per semplicita'.
- * Un solo carattere, poi un separatore (non usare lo spazio) ed il valore.
+ * Acquisisce eventuali parametri da riga di comando. Sintassi minimale:
+ * un solo carattere, poi il separatore : (senza spazi) ed il valore.
  * Parametri non validi vengono ignorati, si usa il valore di default.
  * Non controlla esistenza parametri duplicati.
  * @param argc
  * @param argv
  * @author Flavio
  */
-void parseArguments(int argc, char *argv[]) {
+static void parseArguments(int argc, char *argv[]) {
 	int i;
 	for (i = 1; i < argc; i++) {
-		char * value = argv[i];
-		if (strlen(value) > 1) {
-			value = value + 2;
-		}
+		char * value = strchr(argv[i], ':');
 		/* si aspetta un formato tipo "x:valore" */
 		switch (argv[i][0]) {
 		case '?':
-			puts("Parametri:  h(ost) p(orta) t(imeout) i(nput_geomap) o(utput_heatmap) r(efresh_sec) ?(aiuto)");
+			puts("Parametri:  h(ost) p(orta) t(imeout) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir) ?(aiuto)");
 			puts("Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
-			printf("Es: %s h:%s p:%d t:%d i:%s o:%s r:%d\n", argv[0], host, port, timeout_sec, GeomapFilePath, HeatmapFilePath, saveDelay);
+			printf("Es: %s h:%s p:%d t:%d i:%s o:%s r:%d j:%d\n", argv[0], host, port, timeout_sec, GeomapFilePath, HeatmapFilePath, saveDelay, pirJitter);
 			exit(EXIT_SUCCESS);
 			break;
 		case 'h':
@@ -334,6 +335,9 @@ void parseArguments(int argc, char *argv[]) {
 		case 't':
 			timeout_sec = parseAsInteger(value);
 			break;
+		case 'j':
+			pirJitter = parseAsInteger(value);
+			break;
 		case 'r':
 			saveDelay = parseAsInteger(value);
 			if (!validateSaveDelay(saveDelay)) {
@@ -350,7 +354,7 @@ void parseArguments(int argc, char *argv[]) {
 /* Entry point */
 int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
-	printf("KML aggiornato ogni %u secondi (se sono presenti valori nuovi)\n", saveDelay);
+	printf("KML rigenerato ogni %u secondi (in presenza di valori nuovi)\n", saveDelay);
 
 	kmlInfo.autore = verid;
 	kmlInfo.name = id;
