@@ -9,7 +9,7 @@
  * @file mh.c
  * @author Flavio Bucceri
  * @date 08 nov 2017
- *	Genera periodicamente un heatmap in formato KML di lampade con loro potenza instantanea e conteggio variazioni di stato del PIR.
+ *	Genera periodicamente un heatmap in formato KML di lampade con anagrafica, potenza instantanea e conteggio variazioni di stato del PIR.
  *	Le anagrafiche sono lette da Geomap.txt, che stabilisce anche il perimetro di interesse.
  */
 #include <stdio.h>
@@ -23,8 +23,12 @@
 #include <unistd.h>
 #include <signal.h>
 
-char *id = "MQTTHeatmap";
-char *verid = "mh-1.1.0";
+#ifndef VERSION
+#define VERSION "1.0.0"
+#endif
+
+char *id = "MqttHeatmap";
+char *verid = "mh-"VERSION;
 
 #define PIR_JITTER 50
 #define MIN_DELAY 10
@@ -32,7 +36,7 @@ char *verid = "mh-1.1.0";
 /* valori di default */
 char *host = "127.0.0.1";
 int port = 1883;
-int timeout_sec = 60;
+int keepalive = 60;
 static char *HeatmapFilePath = "/mnt/sd/Heatmap.kml";
 static char *GeomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
@@ -124,7 +128,7 @@ void LoadGeomapFile(const char *fpath) {
 		fclose(fp);
 		if (!ordered) {
 			qsort(lampData, numItems, sizeof(*lampData), comp);
-			Log("Voci da Geomap.txt riordinate per mac address crescente\n");
+			Log("Voci Geomap riordinate per mac address crescente\n");
 		}
 	} else {
 		err(EXIT_FAILURE, "File Geomap mancante: %s", fpath);
@@ -159,7 +163,7 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 }
 
 /**
- * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna il PW1
+ * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna LampData
  * @author Flavio
  */
 void ReadDimmerFromMQTTMessage(char data[]) {
@@ -236,7 +240,7 @@ static void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mi
  * @author Flavio
  */
 static void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
-	if (message->payload != NULL) { /* serve? */
+	if (message->payload != NULL) {
 		char *payload = (char *) message->payload;
 		char *pch = message->topic + 91; /* confronto solo parte finale stringa usando aritmetica dei puntatori */
 		if (strcmp(pch, axmj_in + 91) == 0) {
@@ -258,7 +262,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				unsigned int val = parseAsInteger(payload);
 				if (validateSaveDelay(val)) {
 					saveDelay = val;
-					printf("\nIntervallo aggiornamento KML: %u secondi\n", val);
+					printf("KML rigenerato ogni %u secondi (in presenza di valori nuovi)\n", val);
 				} else {
 					printf("Comando ignorato: %s\n", payload);
 				}
@@ -290,12 +294,12 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
  */
 
 /**
- * Gestisce un segnale di interrupt. Deve contenere solo operazioni indivisibili.
+ * Gestisce un segnale di interrupt. Deve contenere solo operazioni atomiche, per evitare deadlock
  * @author Flavio
  * @param signo
  */
 static void sig_handler(int signo) {
-	running = 0; /* operazione atomica, per evitare deadlock */
+	running = 0;
 }
 
 /**
@@ -308,15 +312,15 @@ static void sig_handler(int signo) {
  * @author Flavio
  */
 static void parseArguments(int argc, char *argv[]) {
-	int i;
-	for (i = 1; i < argc; i++) {
-		char * value = strchr(argv[i], ':');
+	int i = argc;
+	while (--i) {
+		char * value = strchr(argv[i], ':') + 1;
 		/* si aspetta un formato tipo "x:valore" */
 		switch (argv[i][0]) {
 		case '?':
-			puts("Parametri:  h(ost) p(orta) t(imeout) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir) ?(aiuto)");
-			puts("Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
-			printf("Es: %s h:%s p:%d t:%d i:%s o:%s r:%d j:%d\n", argv[0], host, port, timeout_sec, GeomapFilePath, HeatmapFilePath, saveDelay, pirJitter);
+			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir)");
+			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
+			printf("Default: %s h:%s p:%d k:%d i:%s o:%s r:%d j:%d\n", argv[0], host, port, keepalive, GeomapFilePath, HeatmapFilePath, saveDelay, pirJitter);
 			exit(EXIT_SUCCESS);
 			break;
 		case 'h':
@@ -332,8 +336,8 @@ static void parseArguments(int argc, char *argv[]) {
 		case 'p':
 			port = parseAsInteger(value);
 			break;
-		case 't':
-			timeout_sec = parseAsInteger(value);
+		case 'k':
+			keepalive = parseAsInteger(value);
 			break;
 		case 'j':
 			pirJitter = parseAsInteger(value);
@@ -351,10 +355,9 @@ static void parseArguments(int argc, char *argv[]) {
 	}
 }
 
-/* Entry point */
 int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
-	printf("KML rigenerato ogni %u secondi (in presenza di valori nuovi)\n", saveDelay);
+	printf("%s started -- ? for options\n", verid);
 
 	kmlInfo.autore = verid;
 	kmlInfo.name = id;
@@ -370,7 +373,7 @@ int main(int argc, char *argv[]) {
 	mosquitto_message_callback_set(mosq, my_message_callback);
 	mosquitto_subscribe_callback_set(mosq, my_subscribe_callback);
 
-	if (mosquitto_connect(mosq, host, port, timeout_sec) != MOSQ_ERR_SUCCESS) {
+	if (mosquitto_connect(mosq, host, port, keepalive) != MOSQ_ERR_SUCCESS) {
 		err(EXIT_FAILURE, "Mosquitto_connect failed");
 	}
 
