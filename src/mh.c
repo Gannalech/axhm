@@ -357,7 +357,7 @@ static void parseArguments(int argc, char *argv[]) {
 
 int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
-	printf("%s started -- ? for options\n", verid);
+	printf("%s started - ? for options\n", verid);
 
 	kmlInfo.autore = verid;
 	kmlInfo.name = id;
@@ -402,6 +402,6 @@ int main(int argc, char *argv[]) {
 	mosquitto_loop_stop(mosq, false);
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
-	printf("Servizio %s interrotto.", argv[0]);
+	printf("Servizio %s interrotto.\n", argv[0]);
 	return 0;
 }
