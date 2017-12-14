@@ -243,32 +243,64 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 	if (message->payload != NULL) {
 		char *payload = (char *) message->payload;
 		char *pch = message->topic + 91; /* confronto solo parte finale stringa usando aritmetica dei puntatori */
+		char *resp = NULL;
 		if (strcmp(pch, axmj_in + 91) == 0) {
 			Log("[debug] Messaggio da axmj <= %s\n", payload);
 			ReadDimmerFromMQTTMessage(payload);
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
 			Log("[debug] Messaggio da cmdin <= %s\n", payload);
-			if (strncmp("OFF", payload, 3) == 0) {
+			if (strncmp("OFF", payload, 4) == 0) {
 				writekml = false;
 				fputs("\nSospesa generazione KML\n", stdout);
+				resp = "OK\r\n";
 			} else if (strncmp("ON", payload, 2) == 0) {
 				writekml = true;
 				fputs("\nAttivata generazione KML\n", stdout);
-			} else if (strncmp("GETSTATUS", payload, 9) == 0) {
-				char * answer;
-				asprintf(&answer, (writekml ? "ON:%u\r\n" : "OFF\r\n"), saveDelay);
-				mosquitto_publish(mosq, NULL, cmd_out, strlen(answer), answer, 0, false);
-			} else { /* legge un valore intero */
-				unsigned int val = parseAsInteger(payload);
-				if (validateSaveDelay(val)) {
-					saveDelay = val;
-					printf("KML rigenerato ogni %u secondi (in presenza di valori nuovi)\n", val);
-				} else {
-					printf("Comando ignorato: %s\n", payload);
+				resp = "OK\r\n";
+				char * value = strchr(payload, ':');
+				if (value != NULL) {
+					unsigned int val = parseAsInteger(++value);
+					if (validateSaveDelay(val)) {
+						saveDelay = val;
+						printf("KML ricreato ogni %u secondi (se vi sono valori nuovi)\n", val);
+					} else {
+						resp = "ERROR\r\n";
+					}
 				}
+			} else if (strncmp("SETCOUNT", payload, 8) == 0) {
+				char * mac = strchr(payload, ':') + 1;
+				char * value = strchr(mac, ':');
+				unsigned int v = 0;
+				if (value != NULL) {
+					*value = '\0';
+					value++;
+					v = parseAsInteger(value); /* TODO bool parse(*str, *value) */
+				}
+				if (mac != NULL && mac + 1 != value) {
+					// FIXME meglio mac caseinsensitive
+					LampData *lamp = binsearch_macaddr(mac, lampData, numItems);
+					if (lamp != NULL) {
+						lamp->pir_change_count = v;
+						resp = "OK\r\n";
+					} else {
+						resp = "NOTFOUND\r\n";
+					}
+				} else {
+					for (LampData *lamp = lampData; lamp < lampData + numItems; lamp++) {
+						lamp->pir_change_count = v;
+					}
+					asprintf(&resp, "OK:%u\r\n", numItems);
+				}
+			} else if (strncmp("GETSTATUS", payload, 10) == 0) {
+				asprintf(&resp, (writekml ? "ON:%u\r\n" : "OFF\r\n"), saveDelay);
+			} else if (strncmp("?", payload, 2) == 0) {
+				resp = "OFF ON GETSTATUS SETCOUNT:<macaddress*>:<valorecontatore> (*=opzionale)";
 			}
 		} else {
 			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
+		}
+		if (resp != NULL) {
+			mosquitto_publish(mosq, NULL, cmd_out, strlen(resp), resp, 0, false);
 		}
 	}
 	fflush(stdout);
