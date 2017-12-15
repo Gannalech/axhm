@@ -7,7 +7,7 @@
 
 typedef struct {
 	char *name;
-	char *autore;
+	char *folder;
 } KMLInfo;
 
 typedef struct {

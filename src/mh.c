@@ -55,9 +55,10 @@ bool writekml = true; /* scrive su disco il KML */
 struct mosquitto *mosq = NULL;
 
 /* topic */
+
 char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
-char *cmd_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
-char *cmd_out = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdout/";
+char *cmd_in = "/axmh/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
+char *cmd_out = "/axmh/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdout/";
 
 /** Macro per i messaggi diagnostici */
 #define DEBUG
@@ -182,7 +183,8 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 	int n;
 	const char *pch = data;
 	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e PIR; n = caratteri letti */
-	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%[^;];%*[^#!]%n", macaddr, power, pir,
+	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
+	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%[^;];%*[^#!|]%n", macaddr, power, pir,
 			&n) == 3) {
 		strup(macaddr);
 		/* usa ricerca binaria sui macaddr */
@@ -301,7 +303,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 					for (LampData *lamp = lampData; lamp < lampData + numItems; lamp++) {
 						lamp->pir_change_count = v;
 					}
-					asprintf(&resp, "OK:%u\r\n", numItems);
+					asprintf(&resp, "OK:%u\r\n", numItems); /* FIXME usa char[] */
 				}
 			} else if (strncmp("GETSTATUS", payload, 10) == 0) {
 				asprintf(&resp, (writekml ? "ON:%u\r\n" : "OFF\r\n"), saveDelay);
@@ -403,7 +405,7 @@ int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
 	printf("%s avviato - parametro ? per opzioni\n", verid);
 
-	kmlInfo.autore = verid;
+	kmlInfo.folder = "Luci";
 	kmlInfo.name = id;
 	LoadGeomapFile(GeomapFilePath);
 

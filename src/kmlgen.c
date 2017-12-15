@@ -45,22 +45,15 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	/* PREAMBOLO */
 	aTag(fp, KML);
 	aTagA(fp, "xmlns", "http://www.opengis.net/kml/2.2");
-	aTagA(fp, "xmlns:atom", "http://www.w3.org/2005/Atom");
 	aTag(fp, "Document");
 
 	/* HEADER */
 	aTag(fp, NAME);
 	aText(fp, kml->name);
 	cTag(fp);
-	aTag(fp, "atom:author");
-	aText(fp, kml->autore);
-	cTag(fp);
-	aTag(fp, "atom:name");
-	cTag(fp);
-	/*aTag(fp,"atom:link"); aTagA(fp,"href","http://www.allix.it"); cTag(fp);*/
 	aTag(fp, FOLDER);
 	aTag(fp, NAME);
-	aText(fp, "Luci");
+	aText(fp,  kml->folder);
 	cTag(fp);
 
 	LampData it;
