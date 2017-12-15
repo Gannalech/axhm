@@ -24,13 +24,13 @@
 #include <signal.h>
 
 #ifndef VERSION
-#define VERSION "1.0.0"
+#define VERSION "1.0.1"
 #endif
 
 char *id = "MqttHeatmap";
 char *verid = "mh-"VERSION;
 
-#define PIR_JITTER 50
+#define PIR_JITTER 60
 #define MIN_DELAY 10
 
 /* valori di default */
@@ -40,7 +40,7 @@ int keepalive = 60;
 static char *HeatmapFilePath = "/mnt/sd/Heatmap.kml";
 static char *GeomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
-unsigned int pirJitter = PIR_JITTER; /* variazione segnale ammessa senza cambio stato PIR */
+unsigned int pirJitter = PIR_JITTER; /* variazione segnale sensore PIR senza cambio stato */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -75,6 +75,16 @@ static int comp(const void * elem1, const void * elem2) {
 	char *f = ((LampData*) elem1)->macaddr;
 	char *s = ((LampData*) elem2)->macaddr;
 	return strcmp(f, s);
+}
+
+/**
+ * Converte una stringa in uppercase
+ * @param s
+ */
+void strup(char * s) {
+	while ((*s = toupper(*s))) {
+		s++;
+	}
 }
 
 /**
@@ -114,6 +124,7 @@ void LoadGeomapFile(const char *fpath) {
 		int n;
 		bool ordered = true;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
+			strup(lampData[n].macaddr);
 			lampData[n].pw1[0] = '\0';
 			Log("[debug] %s %s\n", lampData[n].macaddr, lampData[n].nome);
 			if (strcmp(lastmacaddr, lampData[n].macaddr) > 0) {
@@ -173,6 +184,7 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e PIR; n = caratteri letti */
 	while (sscanf(pch, "%*[#.!]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%[^;];%*[^#!]%n", macaddr, power, pir,
 			&n) == 3) {
+		strup(macaddr);
 		/* usa ricerca binaria sui macaddr */
 		Log("[debug] Search for %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
@@ -251,11 +263,11 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 			Log("[debug] Messaggio da cmdin <= %s\n", payload);
 			if (strncmp("OFF", payload, 4) == 0) {
 				writekml = false;
-				fputs("\nSospesa generazione KML\n", stdout);
+				fputs("\nGenerazione kml sospesa\n", stdout);
 				resp = "OK\r\n";
 			} else if (strncmp("ON", payload, 2) == 0) {
 				writekml = true;
-				fputs("\nAttivata generazione KML\n", stdout);
+				fputs("\nGenerazione kml attiva\n", stdout);
 				resp = "OK\r\n";
 				char * value = strchr(payload, ':');
 				if (value != NULL) {
@@ -264,7 +276,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 						saveDelay = val;
 						printf("KML ricreato ogni %u secondi (se vi sono valori nuovi)\n", val);
 					} else {
-						resp = "ERROR\r\n";
+						resp = "ERR\r\n";
 					}
 				}
 			} else if (strncmp("SETCOUNT", payload, 8) == 0) {
@@ -274,10 +286,10 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				if (value != NULL) {
 					*value = '\0';
 					value++;
-					v = parseAsInteger(value); /* TODO bool parse(*str, *value) */
+					v = parseAsInteger(value);
 				}
 				if (mac != NULL && mac + 1 != value) {
-					// FIXME meglio mac caseinsensitive
+					strup(mac);
 					LampData *lamp = binsearch_macaddr(mac, lampData, numItems);
 					if (lamp != NULL) {
 						lamp->pir_change_count = v;
@@ -294,7 +306,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 			} else if (strncmp("GETSTATUS", payload, 10) == 0) {
 				asprintf(&resp, (writekml ? "ON:%u\r\n" : "OFF\r\n"), saveDelay);
 			} else if (strncmp("?", payload, 2) == 0) {
-				resp = "OFF ON GETSTATUS SETCOUNT:<macaddress*>:<valorecontatore> (*=opzionale)";
+				resp = "OFF, ON, GETSTATUS, SETCOUNT:<macaddr>:<valorecontatore>";
 			}
 		} else {
 			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
@@ -389,7 +401,7 @@ static void parseArguments(int argc, char *argv[]) {
 
 int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
-	printf("%s started - ? for options\n", verid);
+	printf("%s avviato - parametro ? per opzioni\n", verid);
 
 	kmlInfo.autore = verid;
 	kmlInfo.name = id;
