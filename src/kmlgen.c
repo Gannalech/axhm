@@ -11,7 +11,7 @@
  * @file kmlgen.c
  * @author Flavio Bucceri
  * @date 27 ott 2017
- * Genera un xml nel formato KML
+ * Genera un xml nel formato KML 2.2 visualizzabile ad esempio in Google Earth
  */
 #include <stdio.h>
 #include "kmlgen.h"
@@ -34,8 +34,9 @@ extern LampData lampData[];
 extern int numItems;
 
 static int i;
+
 /**
- * Scrive su stream il codice KML 2.2
+ * Scrive su stream il codice KML
  * @author Flavio
  * @param fp stream su cui scrivere
  * @param kml dati per il preambolo
@@ -53,13 +54,13 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	cTag(fp);
 	aTag(fp, FOLDER);
 	aTag(fp, NAME);
-	aText(fp,  kml->folder);
+	aText(fp, kml->folder);
 	cTag(fp);
 
 	LampData it;
 	char str[10]; /* fino a 9 cifre? */
 
-	/* VALORI LAMPADA */
+	/* VALORI */
 	for (i = 0; i < numItems; i++) {
 		it = item[i];
 		if (strlen(it.pw1) != 0) {
@@ -71,13 +72,19 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 
 			aTag(fp, EXTENDED_DATA);
 			aTag(fp, DATA);
+			aTagA(fp, NAME, "MAC Address");
+			aTag(fp, VALUE);
+			aText(fp, it.macaddr);
+			cTag(fp);
+			cTag(fp);
+			aTag(fp, DATA);
 			aTagA(fp, NAME, "Dimmer");
 			aTag(fp, VALUE);
 			aText(fp, it.pw1);
 			cTag(fp);
 			cTag(fp);
 			aTag(fp, DATA);
-			aTagA(fp, NAME, "PIR-Count");
+			aTagA(fp, NAME, "PIR Count");
 			sprintf(str, "%u", it.pir_change_count);
 			aTag(fp, VALUE);
 			aText(fp, str);
@@ -120,29 +127,29 @@ int WriteKMLFile(char* fname) {
 
 /* INIZIO CODICE DI TEST */
 /*
-// Parametro opzionale a riga di comando: il nome del file kml
-int main(int argc, char* argv[]) {
-	// Autoflush Eclipse CPP buffered output to see it during debug (workaround)
-	setvbuf(stdout, NULL, _IONBF, 0);
-	//setvbuf(stderr, NULL, _IONBF, 0);
+ // Parametro opzionale a riga di comando: il nome del file kml
+ int main(int argc, char* argv[]) {
+ // Autoflush Eclipse CPP buffered output to see it during debug (workaround)
+ setvbuf(stdout, NULL, _IONBF, 0);
+ //setvbuf(stderr, NULL, _IONBF, 0);
 
-	KMLInfo kmlInfo = { "Heatmap", "MH" };
-	numItems = 3;
-	LampData lampData[] = { { "00158D0000EB5ECE", "nomelamp1", "0", "2", +1, 0, "1.1", "2.0", "0" }, { "00158D0000EB5ECE", "nomelamp2", "50", "2", +1, 0, "1", "2", "3" }, { "00158D0000EB3EF2", "nomelamp3", "1000", "2", +1, 0, "1", "2", "3" } };
-	write_kml(stdout, &kmlInfo, lampData);
+ KMLInfo kmlInfo = { "Heatmap", "MH" };
+ numItems = 3;
+ LampData lampData[] = { { "00158D0000EB5ECE", "nomelamp1", "0", "2", +1, 0, "1.1", "2.0", "0" }, { "00158D0000EB5ECE", "nomelamp2", "50", "2", +1, 0, "1", "2", "3" }, { "00158D0000EB3EF2", "nomelamp3", "1000", "2", +1, 0, "1", "2", "3" } };
+ write_kml(stdout, &kmlInfo, lampData);
 
-	// default if filename not specified at command line
-	char* fname = (argc == 2 ? argv[1] : "heatmap_kml.xml");
+ // default if filename not specified at command line
+ char* fname = (argc == 2 ? argv[1] : "heatmap_kml.xml");
 
-	FILE *fp = fopen(fname, "w");
-	if (fp == NULL) {
-		fprintf(stderr, "Error opening file: %s\n", fname);
-		return 1;
-	}
+ FILE *fp = fopen(fname, "w");
+ if (fp == NULL) {
+ fprintf(stderr, "Error opening file: %s\n", fname);
+ return 1;
+ }
 
-	write_kml(fp, &kmlInfo, lampData);
-	fclose(fp);
-	return 0;
-}
-*/
+ write_kml(fp, &kmlInfo, lampData);
+ fclose(fp);
+ return 0;
+ }
+ */
 /* FINE CODICE DI TEST */

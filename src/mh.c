@@ -10,7 +10,7 @@
  * @author Flavio Bucceri
  * @date 08 nov 2017
  *	Genera periodicamente un heatmap in formato KML di lampade con anagrafica, potenza instantanea e conteggio variazioni di stato del PIR.
- *	Le anagrafiche sono lette da Geomap.txt, che stabilisce anche il perimetro di interesse.
+ *	Le anagrafiche sono lette da Geomap.txt, e corrispondono al perimetro di interesse.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,13 +22,11 @@
 #include <err.h>
 #include <unistd.h>
 #include <signal.h>
+#include <ctype.h>
 
 #ifndef VERSION
-#define VERSION "1.0.1"
+#define VERSION "1.0"
 #endif
-
-char *id = "MqttHeatmap";
-char *verid = "mh-"VERSION;
 
 #define PIR_JITTER 60
 #define MIN_DELAY 10
@@ -37,8 +35,8 @@ char *verid = "mh-"VERSION;
 char *host = "127.0.0.1";
 int port = 1883;
 int keepalive = 60;
-static char *HeatmapFilePath = "/mnt/sd/Heatmap.kml";
-static char *GeomapFilePath = "/www/Geomap.txt";
+static char *heatmapFilePath = "/mnt/sd/Heatmap.kml";
+static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
 unsigned int pirJitter = PIR_JITTER; /* variazione segnale sensore PIR senza cambio stato */
 
@@ -50,12 +48,12 @@ static volatile sig_atomic_t running = 1;
 
 time_t timeLastSaved;
 bool changed = true; /* arrivata misura nuova rispetto al KML salvato, se gia' creato */
-bool writekml = true; /* scrive su disco il KML */
+bool writekml = true; /* scrive il file KML */
 
 struct mosquitto *mosq = NULL;
+int mosq_log_levels = MOSQ_LOG_ERR | MOSQ_LOG_INFO | MOSQ_LOG_WARNING;
 
 /* topic */
-
 char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
 char *cmd_in = "/axmh/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
 char *cmd_out = "/axmh/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdout/";
@@ -112,27 +110,26 @@ unsigned int parseAsInteger(char * str) {
 }
 
 /**
- * Legge da disco il file Geomap con le anagrafiche delle lampade di interesse
- * Ordina alfanumericamente per mac address se necessario
+ * Legge il file Geomap con le anagrafiche delle lampade di interesse
+ * Ordina per mac address se necessario
  * @author Flavio
  */
 void LoadGeomapFile(const char *fpath) {
 	FILE *fp;
 	if ((fp = fopen(fpath, "r")) != NULL) {
-		/* XXX fare qsort senza controllare prima l'ordinamento? */
-		char lastmacaddr[17];
-		lastmacaddr[0] = '\0';
+		char * lastmac = lampData[0].macaddr;
 		int n;
 		bool ordered = true;
 		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
 			strup(lampData[n].macaddr);
 			lampData[n].pw1[0] = '\0';
 			Log("[debug] %s %s\n", lampData[n].macaddr, lampData[n].nome);
-			if (strcmp(lastmacaddr, lampData[n].macaddr) > 0) {
+			/* controlla se mac address in ordine alfanumerico crescente */
+			if (strcmp(lastmac, lampData[n].macaddr) > 0) {
 				ordered = false;
 			}
-			strcpy(lastmacaddr, lampData[n].macaddr);
-			strcpy(lampData[n].pir, "0"); /* valore iniziale */
+			lastmac = lampData[n].macaddr;
+			lampData[n].pir = 0;
 			lampData[n].pir_change_count = 0;
 			lampData[n].pir_delta_sign = 1;
 		}
@@ -158,16 +155,21 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 	LampData *high = &lamp[n];
 	LampData *mid;
 
+	int skip = 0;
 	while (low < high) {
 		mid = low + (high - low) / 2;
-		if ((cond = strcmp(macaddr, mid->macaddr)) < 0) {
-			Log("[debug] %s < %s\n", macaddr, mid->macaddr);
+		if (strlen(macaddr) == 6) {
+			/* ricerca solo suffisso macaddr */
+			skip = 10;
+		}
+		if ((cond = strcmp(macaddr, mid->macaddr + skip)) < 0) {
+			Log("[debug] %s < %s\n", macaddr, mid->macaddr + skip);
 			high = mid;
 		} else if (cond > 0) {
-			Log("[debug] %s > %s\n", macaddr, mid->macaddr);
+			Log("[debug] %s > %s\n", macaddr, mid->macaddr + skip);
 			low = mid + 1;
 		} else {
-			Log("[debug] found: %s\n", mid->macaddr);
+			Log("[debug] trovo: %s\n", mid->macaddr);
 			return mid;
 		}
 	}
@@ -179,16 +181,16 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
  * @author Flavio
  */
 void ReadDimmerFromMQTTMessage(char data[]) {
-	char macaddr[17], power[4], pir[4];
+	char macaddr[17], power[4];
+	int pir;
 	int n;
 	const char *pch = data;
 	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e PIR; n = caratteri letti */
 	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
-	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%[^;];%*[^#!|]%n", macaddr, power, pir,
+	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%5d;%*[^#!|]%n", macaddr, power, &pir,
 			&n) == 3) {
 		strup(macaddr);
-		/* usa ricerca binaria sui macaddr */
-		Log("[debug] Search for %s\n", macaddr);
+		Log("[debug] Cerco %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
 		if (lamp != NULL) {
 			Log("[debug] PW1 di %s = '%s'(era '%s') \n", macaddr, power, lamp->pw1);
@@ -197,12 +199,11 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 				changed = true; /* va ricreato il file KML */
 			}
 
-			Log("[debug] PIR di %s = '%s'(era '%s') \n", macaddr, pir, lamp->pir);
-			unsigned int x = parseAsInteger(pir);
-			unsigned int x0 = parseAsInteger(lamp->pir);
-			strcpy(lamp->pir, pir);
-			if (lamp->pir_delta_sign * (x - x0) > PIR_JITTER) { /* variazione PIR sopra soglia */
-				Log("[debug] PIR di %s fa scattare contatore (%d): delta %u\n", macaddr, lamp->pir_delta_sign, x - x0);
+			Log("[debug] PIR di %s = '%d' (era '%d')\n", macaddr, pir, lamp->pir);
+			int pir0 = lamp->pir;
+			lamp->pir = pir;
+			if (lamp->pir_delta_sign * (pir - pir0) > pirJitter) { /* variazione PIR sopra soglia */
+				Log("[debug] PIR di %s fa scattare contatore: delta %d\n", macaddr, pir - pir0);
 				lamp->pir_change_count++;
 				lamp->pir_delta_sign = -lamp->pir_delta_sign;
 				changed = true; /* va ricreato il file KML */
@@ -217,8 +218,10 @@ void ReadDimmerFromMQTTMessage(char data[]) {
  * @author Flavio
  */
 static void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *str) {
-	/* Pring all log messages regardless of level. */
-	printf("%s\n", str);
+	/* Visualizza messaggi di log secondo flag in mosq_log_levels */
+	if (level & mosq_log_levels) {
+		puts(str);
+	}
 }
 
 /**
@@ -255,14 +258,18 @@ static void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mi
  */
 static void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
 	if (message->payload != NULL) {
+
 		char *payload = (char *) message->payload;
 		char *pch = message->topic + 91; /* confronto solo parte finale stringa usando aritmetica dei puntatori */
+		char aResp[50];
 		char *resp = NULL;
+
 		if (strcmp(pch, axmj_in + 91) == 0) {
 			Log("[debug] Messaggio da axmj <= %s\n", payload);
 			ReadDimmerFromMQTTMessage(payload);
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
 			Log("[debug] Messaggio da cmdin <= %s\n", payload);
+			/* todo split */
 			if (strncmp("OFF", payload, 4) == 0) {
 				writekml = false;
 				fputs("\nGenerazione kml sospesa\n", stdout);
@@ -271,9 +278,9 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				writekml = true;
 				fputs("\nGenerazione kml attiva\n", stdout);
 				resp = "OK\r\n";
-				char * value = strchr(payload, ':');
-				if (value != NULL) {
-					unsigned int val = parseAsInteger(++value);
+				char * sVal = strchr(payload, ' ');
+				if (sVal != NULL) {
+					unsigned int val = parseAsInteger(++sVal);
 					if (validateSaveDelay(val)) {
 						saveDelay = val;
 						printf("KML ricreato ogni %u secondi (se vi sono valori nuovi)\n", val);
@@ -282,62 +289,46 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 					}
 				}
 			} else if (strncmp("SETCOUNT", payload, 8) == 0) {
-				char * mac = strchr(payload, ':') + 1;
-				char * value = strchr(mac, ':');
+				LampData *lamp;
 				unsigned int v = 0;
-				if (value != NULL) {
-					*value = '\0';
-					value++;
-					v = parseAsInteger(value);
-				}
-				if (mac != NULL && mac + 1 != value) {
+				char mac[17]; /* todo globale? */
+				int n = sscanf(payload, "SETCOUNT %u %16s", &v, mac);
+				if (n == 2) {
 					strup(mac);
-					LampData *lamp = binsearch_macaddr(mac, lampData, numItems);
+					lamp = binsearch_macaddr(mac, lampData, numItems);
 					if (lamp != NULL) {
 						lamp->pir_change_count = v;
+						printf("Conteggio PIR di %s = %d\n", mac, v);
 						resp = "OK\r\n";
 					} else {
 						resp = "NOTFOUND\r\n";
 					}
-				} else {
-					for (LampData *lamp = lampData; lamp < lampData + numItems; lamp++) {
+				} else if (n == 1) {
+					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
 						lamp->pir_change_count = v;
 					}
-					asprintf(&resp, "OK:%u\r\n", numItems); /* FIXME usa char[] */
+					printf("Conteggi PIR = %d\n", v);
+					sprintf(aResp, "OK %u\r\n", numItems);
+					resp = aResp;
+				} else {
+					resp = "ERR\r\n";
 				}
 			} else if (strncmp("GETSTATUS", payload, 10) == 0) {
-				asprintf(&resp, (writekml ? "ON:%u\r\n" : "OFF\r\n"), saveDelay);
+				sprintf(aResp, (writekml ? "ON %u\r\n" : "OFF\r\n"), saveDelay);
+				resp = aResp;
 			} else if (strncmp("?", payload, 2) == 0) {
-				resp = "OFF, ON, GETSTATUS, SETCOUNT:<macaddr>:<valorecontatore>";
+				resp = "OFF, ON, GETSTATUS, SETCOUNT valorecontatore macaddr";
 			}
 		} else {
 			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
 		}
 		if (resp != NULL) {
+			Log("[debug] Risposta => %s", resp);
 			mosquitto_publish(mosq, NULL, cmd_out, strlen(resp), resp, 0, false);
 		}
 	}
 	fflush(stdout);
 }
-
-/* TEST */
-/*
- void main2(int argc, char *argv[]) {
- // Evita problemi con stdout/stderr durante debug interattivo
- setvbuf(stdout, NULL, _IONBF, 0);
- setvbuf(stderr, NULL, _IONBF, 0);
- char strMqttMsg[50000] =
- "#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
- kmlInfo.autore = verid;
- kmlInfo.name = "MQTTHeatmap-test";
- LoadGeomapFile(GeomapFilePath);
- ReadDimmerFromMQTTMessage(strMqttMsg);
- int i;
- for (i = 0; i < numItems; i++) {
- printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
- }
- }
- */
 
 /**
  * Gestisce un segnale di interrupt. Deve contenere solo operazioni atomiche, per evitare deadlock
@@ -364,20 +355,22 @@ static void parseArguments(int argc, char *argv[]) {
 		/* si aspetta un formato tipo "x:valore" */
 		switch (argv[i][0]) {
 		case '?':
-			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir)");
+			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir) l(og_levels)");
 			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
-			printf("Default: %s h:%s p:%d k:%d i:%s o:%s r:%d j:%d\n", argv[0], host, port, keepalive, GeomapFilePath, HeatmapFilePath, saveDelay, pirJitter);
+			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d j:%d l:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, pirJitter, mosq_log_levels);
 			exit(EXIT_SUCCESS);
 			break;
+		case 'l':
+			mosq_log_levels = parseAsInteger(value);
+			break;
 		case 'h':
-			/* TODO validazione: IP o nome dominio? */
 			host = value;
 			break;
 		case 'i':
-			GeomapFilePath = value;
+			geomapFilePath = value;
 			break;
 		case 'o':
-			HeatmapFilePath = value;
+			heatmapFilePath = value;
 			break;
 		case 'p':
 			port = parseAsInteger(value);
@@ -401,17 +394,36 @@ static void parseArguments(int argc, char *argv[]) {
 	}
 }
 
+/* TEST */
+/*
+void main(int argc, char *argv[]) {
+	// Evita problemi con stdout/stderr durante debug interattivo
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+	char strMqttMsg[50000] =
+			"#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
+	kmlInfo.folder = "Lumi";
+	kmlInfo.name = "HeatmapTest";
+	LoadGeomapFile(GeomapFilePath);
+	ReadDimmerFromMQTTMessage(strMqttMsg);
+	int i;
+	for (i = 0; i < numItems; i++) {
+		printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
+	}
+}
+*/
+
 int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
-	printf("%s avviato - parametro ? per opzioni\n", verid);
+	puts("mh-"VERSION" avviato - parametro ? per opzioni");
 
-	kmlInfo.folder = "Luci";
-	kmlInfo.name = id;
-	LoadGeomapFile(GeomapFilePath);
+	kmlInfo.folder = "luci";
+	kmlInfo.name = "Heatmap";
+	LoadGeomapFile(geomapFilePath);
 
 	mosquitto_lib_init();
 
-	if (!(mosq = mosquitto_new(id, true/*clean_session*/, NULL))) {
+	if (!(mosq = mosquitto_new("MqttHeatmap", true/*clean_session*/, NULL))) {
 		err(EXIT_FAILURE, "Mosquitto_new failed");
 	}
 	mosquitto_log_callback_set(mosq, my_log_callback);
@@ -427,18 +439,19 @@ int main(int argc, char *argv[]) {
 
 	/* abilita cattura SIGINT (ctrl+C) e SIGTERM (kill -p) */
 	if (signal(SIGINT, sig_handler) == SIG_ERR) {
-		printf("Cannot catch SIGINT ...\n");
+		puts("Cannot catch SIGINT ...");
 	}
 	if (signal(SIGTERM, sig_handler) == SIG_ERR) {
-		printf("Cannot catch SIGTERM ...\n");
+		puts("Cannot catch SIGTERM ...");
 	}
+
 	changed = true;
 	timeLastSaved = 0;
 
 	while (running) {
 		/* se ci sono misure nuove e scrittura kml e' attiva e tempo da ultimo salvataggio superiore a intervallo minimo in secondi */
 		if (changed && writekml && difftime(time(NULL), timeLastSaved) >= saveDelay) {
-			WriteKMLFile(HeatmapFilePath);
+			WriteKMLFile(heatmapFilePath);
 			timeLastSaved = time(NULL); /* istante attuale */
 			changed = false;
 		}
@@ -449,5 +462,5 @@ int main(int argc, char *argv[]) {
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
 	printf("Servizio %s interrotto.\n", argv[0]);
-	return 0;
+	return EXIT_SUCCESS;
 }
