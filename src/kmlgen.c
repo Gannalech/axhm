@@ -85,7 +85,7 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 			cTag(fp);
 			aTag(fp, DATA);
 			aTagA(fp, NAME, "PIR Count");
-			sprintf(str, "%d", it.pir_change_count);
+			sprintf(str, "%d", it.adc_change_count);
 			aTag(fp, VALUE);
 			aText(fp, str);
 			cTag(fp);
