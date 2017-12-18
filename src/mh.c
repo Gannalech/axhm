@@ -9,7 +9,7 @@
  * @file mh.c
  * @author Flavio Bucceri
  * @date 08 nov 2017
- *	Genera periodicamente un heatmap in formato KML di lampade con anagrafica, potenza instantanea e conteggio variazioni di stato del PIR.
+ *	Genera periodicamente un heatmap in formato KML di lampade con anagrafica, potenza instantanea e conteggio variazioni di stato del ADC.
  *	Le anagrafiche sono lette da Geomap.txt, e corrispondono al perimetro di interesse.
  */
 #include <stdio.h>
@@ -28,7 +28,8 @@
 #define VERSION "1.0"
 #endif
 
-#define PIR_JITTER 40
+#define ADC_JITTER 40
+
 #define MIN_DELAY 10
 
 /* valori di default */
@@ -38,7 +39,7 @@ int keepalive = 60;
 static char *heatmapFilePath = "/mnt/sd/Heatmap.kml";
 static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
-int pirJitter = PIR_JITTER; /* variazione segnale sensore PIR senza cambio stato */
+int adcJitter = ADC_JITTER; /* variazione segnale sensore ADC senza cambio stato */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -129,9 +130,9 @@ void LoadGeomapFile(const char *fpath) {
 				ordered = false;
 			}
 			lastmac = lampData[n].macaddr;
-			lampData[n].pir = 0;
-			lampData[n].pir_change_count = 0;
-			lampData[n].pir_delta_sign = 1;
+			lampData[n].adc = 0;
+			lampData[n].adc_change_count = 0;
+			lampData[n].adc_sign = 1;
 		}
 		numItems = n;
 		fclose(fp);
@@ -182,12 +183,12 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
  */
 void ReadDimmerFromMQTTMessage(char data[]) {
 	char macaddr[17], power[4];
-	int pir;
+	int adc;
 	int n;
 	const char *pch = data;
-	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e PIR; n = caratteri letti */
+	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e ADC; n = caratteri letti */
 	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
-	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%5d;%*[^#!|]%n", macaddr, power, &pir,
+	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%5d;%*[^#!|]%n", macaddr, power, &adc,
 			&n) == 3) {
 		strup(macaddr);
 		Log("[debug] Cerco %s\n", macaddr);
@@ -199,21 +200,16 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 				changed = true; /* va ricreato il file KML */
 			}
 
-			Log("[debug] PIR di %s = %d (era %d)\n", macaddr, pir, lamp->pir);
-			int pir0 = lamp->pir;
-			lamp->pir = pir;
-			/* variazione PIR sopra soglia (prima lettura puo' dare uno scatto spurio) */
-			if (lamp->pir_delta_sign * (pir - pir0) > pirJitter) {
-				Log("[debug] PIR di %s fa scattare contatore: delta %d\n", macaddr, pir - pir0);
-				lamp->pir_change_count++;
-				lamp->pir_delta_sign = -lamp->pir_delta_sign;
+			Log("[debug] ADC di %s = %d (era %d)\n", macaddr, adc, lamp->adc);
+			int adc0 = lamp->adc;
+			lamp->adc = adc;
+			/* variazione ADC sopra soglia (prima lettura puo' dare uno scatto spurio) */
+			if (lamp->adc_sign * (adc - adc0) > adcJitter) {
+				Log("[debug] ADC di %s fa scattare contatore: delta %d\n", macaddr, adc - adc0);
+				lamp->adc_change_count++;
+				lamp->adc_sign = -lamp->adc_sign;
 				changed = true;
-			} /*else if ((pir > 40 && pir - pir0 > pirJitter && lamp->pir_delta_sign == 1) || (pir < 20 && pir0 - pir > pirJitter && lamp->pir_delta_sign == -1)) {
-				Log("[debug] PIR di %s fa scattare contatore: estremo %d\n", macaddr, pir);
-				lamp->pir_change_count++;
-				lamp->pir_delta_sign = -lamp->pir_delta_sign;
-				changed = true;
-			}*/
+			}
 		}
 		pch += n;
 	}
@@ -303,17 +299,17 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 					strup(mac);
 					lamp = binsearch_macaddr(mac, lampData, numItems);
 					if (lamp != NULL) {
-						lamp->pir_change_count = v;
-						printf("Conteggio PIR di %s = %d\n", mac, v);
+						lamp->adc_change_count = v;
+						printf("Conteggio ADC di %s = %d\n", mac, v);
 						resp = "OK\r\n";
 					} else {
 						resp = "NOTFOUND\r\n";
 					}
 				} else if (n == 1) {
 					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
-						lamp->pir_change_count = v;
+						lamp->adc_change_count = v;
 					}
-					printf("Conteggi PIR = %d\n", v);
+					printf("Conteggi ADC = %d\n", v);
 					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
 				} else {
@@ -361,9 +357,9 @@ static void parseArguments(int argc, char *argv[]) {
 		/* legge il primo char */
 		switch (argv[i][0]) {
 		case '?':
-			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir) l(og_levels)");
+			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_adc) l(og_levels)");
 			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
-			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d j:%d l:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, pirJitter, mosq_log_levels);
+			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d j:%d l:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, adcJitter, mosq_log_levels);
 			exit(EXIT_SUCCESS);
 			break;
 		case 'l':
@@ -385,7 +381,7 @@ static void parseArguments(int argc, char *argv[]) {
 			keepalive = parseAsInteger(value);
 			break;
 		case 'j':
-			pirJitter = parseAsInteger(value);
+			adcJitter = parseAsInteger(value);
 			break;
 		case 'r':
 			saveDelay = parseAsInteger(value);

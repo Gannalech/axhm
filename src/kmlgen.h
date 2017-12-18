@@ -14,9 +14,9 @@ typedef struct {
 	char macaddr[17];
 	char nome[36];
 	char pw1[5];
-	int pir;
-	int pir_delta_sign;
-	int pir_change_count;
+	int adc;
+	int adc_sign;
+	int adc_change_count;
 	char coord1[16], coord2[16], coord3[16];
 } LampData;
 
