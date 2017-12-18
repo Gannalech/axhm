@@ -72,7 +72,7 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 
 			aTag(fp, EXTENDED_DATA);
 			aTag(fp, DATA);
-			aTagA(fp, NAME, "MAC Address");
+			aTagA(fp, NAME, "MAC");
 			aTag(fp, VALUE);
 			aText(fp, it.macaddr);
 			cTag(fp);
@@ -85,7 +85,7 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 			cTag(fp);
 			aTag(fp, DATA);
 			aTagA(fp, NAME, "PIR Count");
-			sprintf(str, "%u", it.pir_change_count);
+			sprintf(str, "%d", it.pir_change_count);
 			aTag(fp, VALUE);
 			aText(fp, str);
 			cTag(fp);

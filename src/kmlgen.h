@@ -16,7 +16,7 @@ typedef struct {
 	char pw1[5];
 	int pir;
 	int pir_delta_sign;
-	unsigned int pir_change_count;
+	int pir_change_count;
 	char coord1[16], coord2[16], coord3[16];
 } LampData;
 

@@ -28,7 +28,7 @@
 #define VERSION "1.0"
 #endif
 
-#define PIR_JITTER 60
+#define PIR_JITTER 40
 #define MIN_DELAY 10
 
 /* valori di default */
@@ -38,7 +38,7 @@ int keepalive = 60;
 static char *heatmapFilePath = "/mnt/sd/Heatmap.kml";
 static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
-unsigned int pirJitter = PIR_JITTER; /* variazione segnale sensore PIR senza cambio stato */
+int pirJitter = PIR_JITTER; /* variazione segnale sensore PIR senza cambio stato */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -193,21 +193,27 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 		Log("[debug] Cerco %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
 		if (lamp != NULL) {
-			Log("[debug] PW1 di %s = '%s'(era '%s') \n", macaddr, power, lamp->pw1);
+			Log("[debug] PW1 di %s = '%s' (era '%s')\n", macaddr, power, lamp->pw1);
 			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
 				strcpy(lamp->pw1, power);
 				changed = true; /* va ricreato il file KML */
 			}
 
-			Log("[debug] PIR di %s = '%d' (era '%d')\n", macaddr, pir, lamp->pir);
+			Log("[debug] PIR di %s = %d (era %d)\n", macaddr, pir, lamp->pir);
 			int pir0 = lamp->pir;
 			lamp->pir = pir;
-			if (lamp->pir_delta_sign * (pir - pir0) > pirJitter) { /* variazione PIR sopra soglia */
+			/* variazione PIR sopra soglia (prima lettura puo' dare uno scatto spurio) */
+			if (lamp->pir_delta_sign * (pir - pir0) > pirJitter) {
 				Log("[debug] PIR di %s fa scattare contatore: delta %d\n", macaddr, pir - pir0);
 				lamp->pir_change_count++;
 				lamp->pir_delta_sign = -lamp->pir_delta_sign;
-				changed = true; /* va ricreato il file KML */
-			}
+				changed = true;
+			} /*else if ((pir > 40 && pir - pir0 > pirJitter && lamp->pir_delta_sign == 1) || (pir < 20 && pir0 - pir > pirJitter && lamp->pir_delta_sign == -1)) {
+				Log("[debug] PIR di %s fa scattare contatore: estremo %d\n", macaddr, pir);
+				lamp->pir_change_count++;
+				lamp->pir_delta_sign = -lamp->pir_delta_sign;
+				changed = true;
+			}*/
 		}
 		pch += n;
 	}
@@ -290,7 +296,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				}
 			} else if (strncmp("SETCOUNT", payload, 8) == 0) {
 				LampData *lamp;
-				unsigned int v = 0;
+				int v = 0;
 				char mac[17]; /* todo globale? */
 				int n = sscanf(payload, "SETCOUNT %u %16s", &v, mac);
 				if (n == 2) {
@@ -308,7 +314,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 						lamp->pir_change_count = v;
 					}
 					printf("Conteggi PIR = %d\n", v);
-					sprintf(aResp, "OK %u\r\n", numItems);
+					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
 				} else {
 					resp = "ERR\r\n";
@@ -352,7 +358,7 @@ static void parseArguments(int argc, char *argv[]) {
 	int i = argc;
 	while (--i) {
 		char * value = strchr(argv[i], ':') + 1;
-		/* si aspetta un formato tipo "x:valore" */
+		/* legge il primo char */
 		switch (argv[i][0]) {
 		case '?':
 			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_pir) l(og_levels)");
@@ -396,22 +402,22 @@ static void parseArguments(int argc, char *argv[]) {
 
 /* TEST */
 /*
-void main(int argc, char *argv[]) {
-	// Evita problemi con stdout/stderr durante debug interattivo
-	setvbuf(stdout, NULL, _IONBF, 0);
-	setvbuf(stderr, NULL, _IONBF, 0);
-	char strMqttMsg[50000] =
-			"#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
-	kmlInfo.folder = "Lumi";
-	kmlInfo.name = "HeatmapTest";
-	LoadGeomapFile(GeomapFilePath);
-	ReadDimmerFromMQTTMessage(strMqttMsg);
-	int i;
-	for (i = 0; i < numItems; i++) {
-		printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
-	}
-}
-*/
+ void main(int argc, char *argv[]) {
+ // Evita problemi con stdout/stderr durante debug interattivo
+ setvbuf(stdout, NULL, _IONBF, 0);
+ setvbuf(stderr, NULL, _IONBF, 0);
+ char strMqttMsg[50000] =
+ "#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
+ kmlInfo.folder = "Lumi";
+ kmlInfo.name = "HeatmapTest";
+ LoadGeomapFile(GeomapFilePath);
+ ReadDimmerFromMQTTMessage(strMqttMsg);
+ int i;
+ for (i = 0; i < numItems; i++) {
+ printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
+ }
+ }
+ */
 
 int main(int argc, char *argv[]) {
 	parseArguments(argc, argv);
