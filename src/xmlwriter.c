@@ -18,6 +18,7 @@
 
 /* Includes */
 #include <stdio.h>
+#include "xmlwriter.h"
 
 /* Macro definitions */
 #define FALSE 0
@@ -52,8 +53,6 @@ void aTag(FILE *fp, char * name) {
 /**
  * Scrive testo sullo stream, finalizzando eventuali tag pendenti
  * @author Flavio
- *
- * XXX varargs per concatenare testo?
  **/
 void aText(FILE *fp, char * text) {
 	if (isEmpty && top > 0) {
@@ -145,8 +144,7 @@ void write_end_element(FILE *fp) {
 }
 
 /* INIZIO CODICE DI TEST */
-/*
- static void test_xml_1(FILE *fp) {
+/* static void test_xml_1(FILE *fp) {
  write_element_with_attribute(fp, "news", "test", "attrib", "value");
  write_element(fp, "name", NULL);
  write_element_with_attribute(fp, "news", NULL, "attrib", "value");
@@ -210,5 +208,5 @@ void write_end_element(FILE *fp) {
  fputs("\n\nMetodo 2:\n\n",stdout);
  test_xml_2(stdout);
  }
- */
+*/
 /* FINE CODICE DI TEST */

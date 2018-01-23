@@ -11,13 +11,14 @@
  * @file kmlgen.c
  * @author Flavio Bucceri
  * @date 27 ott 2017
- * Genera un xml nel formato KML 2.2 visualizzabile ad esempio in Google Earth
+ * Genera un file KML 2.2 visualizzabile ad esempio in Google Earth
  */
 #include <stdio.h>
 #include "kmlgen.h"
 #include "xmlwriter.h"
 #include <string.h>
 
+static char* DOCUMENT = "Document";
 static char* EXTENDED_DATA = "ExtendedData";
 static char* DATA = "Data";
 static char* VALUE = "value";
@@ -44,68 +45,71 @@ static int i;
  */
 void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	/* PREAMBOLO */
-	aTag(fp, KML);
-	aTagA(fp, "xmlns", "http://www.opengis.net/kml/2.2");
-	aTag(fp, "Document");
+	TAG(KML);
+	ATTR("xmlns", "http://www.opengis.net/kml/2.2");
+	TAG(DOCUMENT);
 
 	/* HEADER */
-	aTag(fp, NAME);
-	aText(fp, kml->name);
-	cTag(fp);
-	aTag(fp, FOLDER);
-	aTag(fp, NAME);
-	aText(fp, kml->folder);
-	cTag(fp);
+	TAG(NAME);
+	TEXT(kml->name);
+	CTAG();
+	TAG(FOLDER);
+	TAG(NAME);
+	TEXT(kml->folder);
+	CTAG();
 
-	LampData it;
 	char str[10]; /* fino a 9 cifre? */
 
 	/* VALORI */
 	for (i = 0; i < numItems; i++) {
-		it = item[i];
-		if (strlen(it.pw1) != 0) {
-			aTag(fp, PLACEMARK);
-			aTagA(fp, ID, it.macaddr);
-			aTag(fp, NAME);
-			aText(fp, it.nome);
-			cTag(fp);
+		if (strlen(item->pw1) != 0) {
+			TAG(PLACEMARK);
+			ATTR(ID, item->macaddr);
+			TAG(NAME);
+			TEXT(item->nome);
+			CTAG();
 
-			aTag(fp, EXTENDED_DATA);
-			aTag(fp, DATA);
-			aTagA(fp, NAME, "MAC");
-			aTag(fp, VALUE);
-			aText(fp, it.macaddr);
-			cTag(fp);
-			cTag(fp);
-			aTag(fp, DATA);
-			aTagA(fp, NAME, "Dimmer");
-			aTag(fp, VALUE);
-			aText(fp, it.pw1);
-			cTag(fp);
-			cTag(fp);
-			aTag(fp, DATA);
-			aTagA(fp, NAME, "PIR Count");
-			sprintf(str, "%d", it.adc_change_count);
-			aTag(fp, VALUE);
-			aText(fp, str);
-			cTag(fp);
-			cTag(fp);
-			cTag(fp);
+			TAG(EXTENDED_DATA);
+			TAG(DATA);
+			ATTR(NAME, "MAC");
+			TAG(VALUE);
+			TEXT(item->macaddr);
+			CTAG();
+			CTAG();
+			TAG(DATA);
+			ATTR(NAME, "PW1");
+			TAG(VALUE);
+			TEXT(item->pw1);
+			CTAG();
+			CTAG();
+			TAG(DATA);
+			/*ATTR(NAME, "AD0-#");
+			 TAG(VALUE);
+			 sprintf(str, "%d", it->adc_change_count);
+			 TEXT(str);*/
+			ATTR(NAME, "PIR:Count");
+			TAG(VALUE);
+			sprintf(str, "%d", item->pir_count);
+			TEXT(str);
+			CTAG();
+			CTAG();
+			CTAG();
 
-			aTag(fp, POINT);
-			aTag(fp, COORDINATES);
-			aText(fp, it.coord1);
-			aText(fp, ",");
-			aText(fp, it.coord2);
-			aText(fp, ",");
-			aText(fp, it.coord3);
-			cTag(fp);
-			cTag(fp);
-			cTag(fp);
+			TAG(POINT);
+			TAG(COORDINATES);
+			TEXT(item->coord1);
+			TEXT(",");
+			TEXT(item->coord2);
+			TEXT(",");
+			TEXT(item->coord3);
+			CTAG();
+			CTAG();
+			CTAG();
 		}
+		item++; // lampada successiva
 	}
 	/* Chiusura tag aperti */
-	cTags(fp, 0);
+	CTAGS(0);
 }
 
 /**

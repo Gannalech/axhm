@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mh
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
@@ -10,15 +10,15 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 include $(INCLUDE_DIR)/package.mk
 
 define Package/$(PKG_NAME)    
-    SECTION:=utils
-    CATEGORY:=Utilities
+    SECTION:=ax
+    CATEGORY:=Allix
     TITLE:=$(PKG_NAME)
     MAINTAINER:=Allevi Ivan Giovanni<allevi@allix.it>
     DEPENDS+= +libmosquitto +libpthread
 endef
 
 define Package/$(PKG_NAME)/description
-    Legge misure lampade da mqtt, genera periodicamente un file KML con valori di interesse.
+    Legge misure lampade da mqtt, genera periodicamente un KML con valori di interesse.
 endef
 
 CONFIGURE_VARS+= \

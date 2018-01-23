@@ -1,5 +1,5 @@
-LIBS=../mosquitto-ssl/mosquitto-1.4.14/lib/libmosquitto.so.1
-CFLAGS += -DVERSION="1.0.1"
+LIBS=../mosquitto-ssl/mosquitto-*/lib/libmosquitto.so.1
+CFLAGS+= -DVERSION="\"1.0.1\""
 mh: mh.o
 	$(CC) $(LDFLAGS) $(LIBS) mh.o kmlgen.o xmlwriter.o -lpthread -o mh -I.
 

@@ -9,7 +9,7 @@
  * @file mh.c
  * @author Flavio Bucceri
  * @date 08 nov 2017
- *	Genera periodicamente un heatmap in formato KML di lampade con anagrafica, potenza instantanea e conteggio variazioni di stato del ADC.
+ *	Genera periodicamente un heatmap in formato KML di lampade con anagrafica, potenza instantanea e conteggio sensore presenza (PIR).
  *	Le anagrafiche sono lette da Geomap.txt, e corrispondono al perimetro di interesse.
  */
 #include <stdio.h>
@@ -25,10 +25,10 @@
 #include <ctype.h>
 
 #ifndef VERSION
-#define VERSION "1.0"
+#define VERSION "SNAPSHOT"
 #endif
 
-#define ADC_JITTER 40
+//#define ADC_JITTER 40
 
 #define MIN_DELAY 10
 
@@ -39,7 +39,7 @@ int keepalive = 60;
 static char *heatmapFilePath = "/mnt/sd/Heatmap.kml";
 static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
-int adcJitter = ADC_JITTER; /* variazione segnale sensore ADC senza cambio stato */
+//int adcJitter = ADC_JITTER; /* variazione segnale sensore ADC senza cambio stato */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -130,9 +130,11 @@ void LoadGeomapFile(const char *fpath) {
 				ordered = false;
 			}
 			lastmac = lampData[n].macaddr;
-			lampData[n].adc = 0;
-			lampData[n].adc_change_count = 0;
-			lampData[n].adc_sign = 1;
+			lampData[n].pir_count = 0;
+			/*lampData[n].pir_count_old = 0;*/
+			/*lampData[n].adc = 0;
+			 lampData[n].adc_change_count = 0;
+			 lampData[n].adc_sign = 1;*/
 		}
 		numItems = n;
 		fclose(fp);
@@ -186,7 +188,7 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 	int adc;
 	int n;
 	const char *pch = data;
-	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e ADC; n = caratteri letti */
+	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e AD0; n = caratteri letti */
 	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
 	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%5d;%*[^#!|]%n", macaddr, power, &adc,
 			&n) == 3) {
@@ -194,22 +196,35 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 		Log("[debug] Cerco %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
 		if (lamp != NULL) {
+
 			Log("[debug] PW1 di %s = '%s' (era '%s')\n", macaddr, power, lamp->pw1);
 			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
 				strcpy(lamp->pw1, power);
 				changed = true; /* va ricreato il file KML */
 			}
 
-			Log("[debug] ADC di %s = %d (era %d)\n", macaddr, adc, lamp->adc);
-			int adc0 = lamp->adc;
-			lamp->adc = adc;
-			/* variazione ADC sopra soglia (prima lettura puo' dare uno scatto spurio) */
-			if (lamp->adc_sign * (adc - adc0) > adcJitter) {
-				Log("[debug] ADC di %s fa scattare contatore: delta %d\n", macaddr, adc - adc0);
-				lamp->adc_change_count++;
-				lamp->adc_sign = -lamp->adc_sign;
-				changed = true;
+			Log("[debug] AD0 di %s = %d (era %d)\n", macaddr, adc, lamp->pir_count);
+			if (lamp->pir_count != adc) { /* aggiorna solo se diverso */
+				lamp->pir_count = adc;
+				changed = true; /* va ricreato il file KML */
 			}
+
+			/*if (adc - lamp->pir_count_old == 2 * lamp->pir_count) {
+				changed = true; // va ricreato il file KML
+			}
+			lamp->pir_count_old = lamp->pir_count;
+			lamp->pir_count = adc;*/
+
+			/*Log("[debug] ADC di %s = %d (era %d)\n", macaddr, adc, lamp->adc);
+			 int adc0 = lamp->adc;
+			 lamp->adc = adc;
+			 // variazione ADC sopra soglia (prima lettura puo' dare uno scatto spurio)
+			 if (lamp->adc_sign * (adc - adc0) > adcJitter) {
+			 Log("[debug] ADC di %s fa scattare contatore: delta %d\n", macaddr, adc - adc0);
+			 lamp->adc_change_count++;
+			 lamp->adc_sign *= -1;
+			 changed = true;
+			 }*/
 		}
 		pch += n;
 	}
@@ -299,17 +314,21 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 					strup(mac);
 					lamp = binsearch_macaddr(mac, lampData, numItems);
 					if (lamp != NULL) {
-						lamp->adc_change_count = v;
-						printf("Conteggio ADC di %s = %d\n", mac, v);
+						/*lamp->pir_count_old = 0;*/
+						lamp->pir_count = v;
+						/*lamp->adc_change_count = v;*/
+						printf("Conteggio AD0 di %s = %d\n", mac, v);
 						resp = "OK\r\n";
 					} else {
 						resp = "NOTFOUND\r\n";
 					}
 				} else if (n == 1) {
 					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
-						lamp->adc_change_count = v;
+						/*lamp->adc_change_count = v;*/
+						/*lamp->pir_count_old = 0;*/
+						lamp->pir_count = v;
 					}
-					printf("Conteggi ADC = %d\n", v);
+					printf("Conteggi AD0 = %d\n", v);
 					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
 				} else {
@@ -319,7 +338,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				sprintf(aResp, (writekml ? "ON %u\r\n" : "OFF\r\n"), saveDelay);
 				resp = aResp;
 			} else if (strncmp("?", payload, 2) == 0) {
-				resp = "OFF, ON, GETSTATUS, SETCOUNT valorecontatore macaddr";
+				resp = "OFF\r\nON\r\nGETSTATUS\r\nSETCOUNT <valorecontatore> <macaddr>\r\n";
 			}
 		} else {
 			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
@@ -357,9 +376,9 @@ static void parseArguments(int argc, char *argv[]) {
 		/* legge il primo char */
 		switch (argv[i][0]) {
 		case '?':
-			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) j(itter_adc) l(og_levels)");
+			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec)"/* j(itter_adc)*/" l(og_levels)");
 			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
-			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d j:%d l:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, adcJitter, mosq_log_levels);
+			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d"/* j:%d*/" l:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay/*, adcJitter*/, mosq_log_levels);
 			exit(EXIT_SUCCESS);
 			break;
 		case 'l':
@@ -380,9 +399,9 @@ static void parseArguments(int argc, char *argv[]) {
 		case 'k':
 			keepalive = parseAsInteger(value);
 			break;
-		case 'j':
-			adcJitter = parseAsInteger(value);
-			break;
+			/*case 'j':
+			 adcJitter = parseAsInteger(value);
+			 break;*/
 		case 'r':
 			saveDelay = parseAsInteger(value);
 			if (!validateSaveDelay(saveDelay)) {
@@ -416,6 +435,10 @@ static void parseArguments(int argc, char *argv[]) {
  */
 
 int main(int argc, char *argv[]) {
+#ifdef DEBUG
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+#endif
 	parseArguments(argc, argv);
 	puts("mh-"VERSION" avviato - parametro ? per opzioni");
 

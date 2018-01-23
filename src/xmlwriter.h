@@ -9,6 +9,13 @@
 #ifndef XMLWRITER_H_
 #define XMLWRITER_H_
 
+/* MACRO */
+#define TAG(x) aTag(fp,(x))
+#define ATTR(x,y) aTagA(fp,(x),(y))
+#define TEXT(x) aText(fp,(x))
+#define CTAG() cTag(fp)
+#define CTAGS(x) cTags(fp, (x))
+
 /****************************************************************************
  *
  * Scrive un nuovo tag su stream e lo salva sullo stack lifo. Se supera la
