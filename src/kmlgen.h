@@ -13,13 +13,9 @@ typedef struct {
 typedef struct {
 	char macaddr[17];
 	char nome[36];
-	char pw1[5];
-	int pir_count;
-	/*int pir_count_old;*/
-	/*int adc;
-	int adc_sign;
-	int adc_change_count;*/
-	char coord1[16], coord2[16], coord3[16];
+	int ad[2];
+// XXX usa virgola per coordinate.
+	char adc_coord1[2][21], adc_coord2[2][21];
 } LampData;
 
 #define MAX_LAMPS 150

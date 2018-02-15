@@ -34,7 +34,7 @@ extern KMLInfo kmlInfo;
 extern LampData lampData[];
 extern int numItems;
 
-static int i;
+static int i, k;
 
 /**
  * Scrive su stream il codice KML
@@ -58,54 +58,45 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 	TEXT(kml->folder);
 	CTAG();
 
-	char str[10]; /* fino a 9 cifre? */
+	char str[50];
 
 	/* VALORI */
 	for (i = 0; i < numItems; i++) {
-		if (strlen(item->pw1) != 0) {
-			TAG(PLACEMARK);
-			ATTR(ID, item->macaddr);
-			TAG(NAME);
-			TEXT(item->nome);
-			CTAG();
+		for (k = 0; k < 2; k++) {
+			if (item->ad[k] != -1) {
+				TAG(PLACEMARK);
+				snprintf(str, sizeof(str), "%s_AD%d", item->macaddr, k);
+				ATTR(ID, str);
+				TAG(NAME);
+				snprintf(str, sizeof(str), "%s - Sensore %d", item->nome, k);
+				TEXT(str);
+				CTAG();
+				TAG(EXTENDED_DATA);
+				TAG(DATA);
+				ATTR(NAME, "MAC");
+				TAG(VALUE);
+				TEXT(item->macaddr);
+				CTAG();
+				CTAG();
+				TAG(DATA);
+				ATTR(NAME, "ADC");
+				TAG(VALUE);
+				snprintf(str, sizeof(str), "%d", item->ad[k]);
+				TEXT(str);
+				CTAG();
+				CTAG();
+				CTAG();
 
-			TAG(EXTENDED_DATA);
-			TAG(DATA);
-			ATTR(NAME, "MAC");
-			TAG(VALUE);
-			TEXT(item->macaddr);
-			CTAG();
-			CTAG();
-			TAG(DATA);
-			ATTR(NAME, "PW1");
-			TAG(VALUE);
-			TEXT(item->pw1);
-			CTAG();
-			CTAG();
-			TAG(DATA);
-			/*ATTR(NAME, "AD0-#");
-			 TAG(VALUE);
-			 sprintf(str, "%d", it->adc_change_count);
-			 TEXT(str);*/
-			ATTR(NAME, "PIR:Count");
-			TAG(VALUE);
-			sprintf(str, "%d", item->pir_count);
-			TEXT(str);
-			CTAG();
-			CTAG();
-			CTAG();
-
-			TAG(POINT);
-			TAG(COORDINATES);
-			TEXT(item->coord1);
-			TEXT(",");
-			TEXT(item->coord2);
-			TEXT(",");
-			TEXT(item->coord3);
-			CTAG();
-			CTAG();
-			CTAG();
-		}
+				TAG(POINT);
+				TAG(COORDINATES);
+				TEXT(item->adc_coord1[k]);
+				TEXT(",");
+				TEXT(item->adc_coord2[k]);
+				CTAG();
+				CTAG();
+				CTAG();
+			}
+		} // sensore successivo
 		item++; // lampada successiva
 	}
 	/* Chiusura tag aperti */
@@ -128,32 +119,3 @@ int WriteKMLFile(char* fname) {
 	fclose(fp);
 	return 0;
 }
-
-/* INIZIO CODICE DI TEST */
-/*
- // Parametro opzionale a riga di comando: il nome del file kml
- int main(int argc, char* argv[]) {
- // Autoflush Eclipse CPP buffered output to see it during debug (workaround)
- setvbuf(stdout, NULL, _IONBF, 0);
- //setvbuf(stderr, NULL, _IONBF, 0);
-
- KMLInfo kmlInfo = { "Heatmap", "MH" };
- numItems = 3;
- LampData lampData[] = { { "00158D0000EB5ECE", "nomelamp1", "0", "2", +1, 0, "1.1", "2.0", "0" }, { "00158D0000EB5ECE", "nomelamp2", "50", "2", +1, 0, "1", "2", "3" }, { "00158D0000EB3EF2", "nomelamp3", "1000", "2", +1, 0, "1", "2", "3" } };
- write_kml(stdout, &kmlInfo, lampData);
-
- // default if filename not specified at command line
- char* fname = (argc == 2 ? argv[1] : "heatmap_kml.xml");
-
- FILE *fp = fopen(fname, "w");
- if (fp == NULL) {
- fprintf(stderr, "Error opening file: %s\n", fname);
- return 1;
- }
-
- write_kml(fp, &kmlInfo, lampData);
- fclose(fp);
- return 0;
- }
- */
-/* FINE CODICE DI TEST */

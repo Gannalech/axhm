@@ -28,18 +28,15 @@
 #define VERSION "SNAPSHOT"
 #endif
 
-//#define ADC_JITTER 40
-
 #define MIN_DELAY 10
 
 /* valori di default */
 char *host = "127.0.0.1";
 int port = 1883;
 int keepalive = 60;
-static char *heatmapFilePath = "/mnt/sd/Heatmap.kml";
+static char *heatmapFilePath = "/www/Heatmap/Scripts/Heatmap.kml";
 static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
-//int adcJitter = ADC_JITTER; /* variazione segnale sensore ADC senza cambio stato */
 
 extern KMLInfo kmlInfo;
 extern LampData lampData[];
@@ -92,7 +89,7 @@ void strup(char * s) {
  * @param i
  * @return
  */
-static bool validateSaveDelay(unsigned int i) {
+static bool validSaveDelay(unsigned int i) {
 	return (i > 0 && i < 3600);
 }
 
@@ -121,20 +118,19 @@ void LoadGeomapFile(const char *fpath) {
 		char * lastmac = lampData[0].macaddr;
 		int n;
 		bool ordered = true;
-		for (n = 0; n != MAX_LAMPS && fscanf(fp, "%*6[^;];%35[^;];%16[^;];%15[^;];%15[^;];%15[^|]|", lampData[n].nome, lampData[n].macaddr, lampData[n].coord1, lampData[n].coord2, lampData[n].coord3) == 5; n++) {
+		for (n = 0;
+				n != MAX_LAMPS
+						&& fscanf(fp, "%*6[^;];%35[^;];%16[^;];%20[^;];%20[^;];%20[^;];%20[^|;]|", lampData[n].nome, lampData[n].macaddr, lampData[n].adc_coord1[0], lampData[n].adc_coord2[0], lampData[n].adc_coord1[1],
+								lampData[n].adc_coord2[1]) == 6; n++) {
 			strup(lampData[n].macaddr);
-			lampData[n].pw1[0] = '\0';
+			lampData[n].ad[0] = -1;
+			lampData[n].ad[1] = -1;
 			Log("[debug] %s %s\n", lampData[n].macaddr, lampData[n].nome);
 			/* controlla se mac address in ordine alfanumerico crescente */
 			if (strcmp(lastmac, lampData[n].macaddr) > 0) {
 				ordered = false;
 			}
 			lastmac = lampData[n].macaddr;
-			lampData[n].pir_count = 0;
-			/*lampData[n].pir_count_old = 0;*/
-			/*lampData[n].adc = 0;
-			 lampData[n].adc_change_count = 0;
-			 lampData[n].adc_sign = 1;*/
 		}
 		numItems = n;
 		fclose(fp);
@@ -149,6 +145,7 @@ void LoadGeomapFile(const char *fpath) {
 
 /**
  * Ricerca binaria mediante puntatori per trovare un mac address (fonte: K&R)
+ * Modificato per accettare un suffisso di 6 cifre invece del macaddress completo
  * @author Flavio
  *
  */
@@ -184,50 +181,27 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
  * @author Flavio
  */
 void ReadDimmerFromMQTTMessage(char data[]) {
-	char macaddr[17], power[4];
-	int adc;
+	char macaddr[17];
+	int ad[2];
 	int n;
+	int k;
 	const char *pch = data;
-	/* ignora preambolo, legge MAC, salta 17 campi, legge PW1 e AD0; n = caratteri letti */
+	/* ignora preambolo, legge MAC, salta piu' campi, legge AD0 e AD1; n = caratteri letti */
 	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
-	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];PW1%[^;];%*[^;];%*[^;];%*[^;];AD0%5d;%*[^#!|]%n", macaddr, power, &adc,
-			&n) == 3) {
+	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];AD0%5d;AD1%5d;%*[^#!|]%n", macaddr, &ad[0],
+			&ad[1], &n) == 3) {
 		strup(macaddr);
 		Log("[debug] Cerco %s\n", macaddr);
 		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
 		if (lamp != NULL) {
-
-			Log("[debug] PW1 di %s = '%s' (era '%s')\n", macaddr, power, lamp->pw1);
-			if (strcmp(lamp->pw1, power) != 0) { /* aggiorna solo se diverso */
-				strcpy(lamp->pw1, power);
-				changed = true; /* va ricreato il file KML */
+			for (k = 0; k < 2; k++) {
+				Log("[debug] AD%d di %s = %d (era %d)\n", k, macaddr, ad[k], lamp->ad[k]);
+				changed = (lamp->ad[k] != ad[k]); /* aggiorna solo se diverso */
+				lamp->ad[k] = ad[k];
 			}
-
-			Log("[debug] AD0 di %s = %d (era %d)\n", macaddr, adc, lamp->pir_count);
-			if (lamp->pir_count != adc) { /* aggiorna solo se diverso */
-				lamp->pir_count = adc;
-				changed = true; /* va ricreato il file KML */
-			}
-
-			/*if (adc - lamp->pir_count_old == 2 * lamp->pir_count) {
-				changed = true; // va ricreato il file KML
-			}
-			lamp->pir_count_old = lamp->pir_count;
-			lamp->pir_count = adc;*/
-
-			/*Log("[debug] ADC di %s = %d (era %d)\n", macaddr, adc, lamp->adc);
-			 int adc0 = lamp->adc;
-			 lamp->adc = adc;
-			 // variazione ADC sopra soglia (prima lettura puo' dare uno scatto spurio)
-			 if (lamp->adc_sign * (adc - adc0) > adcJitter) {
-			 Log("[debug] ADC di %s fa scattare contatore: delta %d\n", macaddr, adc - adc0);
-			 lamp->adc_change_count++;
-			 lamp->adc_sign *= -1;
-			 changed = true;
-			 }*/
 		}
-		pch += n;
 	}
+	pch += n;
 }
 
 /**
@@ -298,37 +272,39 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				char * sVal = strchr(payload, ' ');
 				if (sVal != NULL) {
 					unsigned int val = parseAsInteger(++sVal);
-					if (validateSaveDelay(val)) {
+					if (validSaveDelay(val)) {
 						saveDelay = val;
 						printf("KML ricreato ogni %u secondi (se vi sono valori nuovi)\n", val);
 					} else {
 						resp = "ERR\r\n";
 					}
 				}
-			} else if (strncmp("SETCOUNT", payload, 8) == 0) {
+			} else if (strncmp("SET-", payload, 4) == 0) {
+				// XXX il reset lato mh non risetta il contatore lato sensore
 				LampData *lamp;
-				int v = 0;
+				int v;
+				int k;
 				char mac[17]; /* todo globale? */
-				int n = sscanf(payload, "SETCOUNT %u %16s", &v, mac);
-				if (n == 2) {
+				int n = sscanf(payload, "SET-%d %u %16s", &k, &v, mac);
+				changed = false;
+				if (n == 3) {
 					strup(mac);
 					lamp = binsearch_macaddr(mac, lampData, numItems);
 					if (lamp != NULL) {
-						/*lamp->pir_count_old = 0;*/
-						lamp->pir_count = v;
-						/*lamp->adc_change_count = v;*/
-						printf("Conteggio AD0 di %s = %d\n", mac, v);
+						changed |= (lamp->ad[k] != v);
+						lamp->ad[k] = v;
+						printf("AD%d (%s) = %d\n", k, mac, v);
 						resp = "OK\r\n";
 					} else {
 						resp = "NOTFOUND\r\n";
 					}
-				} else if (n == 1) {
+				} else if (n == 2) {
 					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
-						/*lamp->adc_change_count = v;*/
-						/*lamp->pir_count_old = 0;*/
-						lamp->pir_count = v;
+						changed |= (lamp->ad[k] != v);
+						lamp->ad[k] = v;
 					}
-					printf("Conteggi AD0 = %d\n", v);
+					// XXX tutti i mac in geomap, anche quelli non validi
+					printf("AD%d (tutti) = %d\n", k, v);
 					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
 				} else {
@@ -338,7 +314,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 				sprintf(aResp, (writekml ? "ON %u\r\n" : "OFF\r\n"), saveDelay);
 				resp = aResp;
 			} else if (strncmp("?", payload, 2) == 0) {
-				resp = "OFF\r\nON\r\nGETSTATUS\r\nSETCOUNT <valorecontatore> <macaddr>\r\n";
+				resp = "OFF\r\nON\r\nGETSTATUS\r\nSET-<indice> <valorecontatore> <macaddr>\r\n";
 			}
 		} else {
 			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
@@ -376,12 +352,12 @@ static void parseArguments(int argc, char *argv[]) {
 		/* legge il primo char */
 		switch (argv[i][0]) {
 		case '?':
-			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec)"/* j(itter_adc)*/" l(og_levels)");
+			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) v(erbosity)");
 			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
-			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d"/* j:%d*/" l:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay/*, adcJitter*/, mosq_log_levels);
+			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d v:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, mosq_log_levels);
 			exit(EXIT_SUCCESS);
 			break;
-		case 'l':
+		case 'v':
 			mosq_log_levels = parseAsInteger(value);
 			break;
 		case 'h':
@@ -399,12 +375,9 @@ static void parseArguments(int argc, char *argv[]) {
 		case 'k':
 			keepalive = parseAsInteger(value);
 			break;
-			/*case 'j':
-			 adcJitter = parseAsInteger(value);
-			 break;*/
 		case 'r':
 			saveDelay = parseAsInteger(value);
-			if (!validateSaveDelay(saveDelay)) {
+			if (!validSaveDelay(saveDelay)) {
 				puts("Valore saveDelay non valido, uso default.\n");
 				saveDelay = MIN_DELAY;
 			}
@@ -415,34 +388,15 @@ static void parseArguments(int argc, char *argv[]) {
 	}
 }
 
-/* TEST */
-/*
- void main(int argc, char *argv[]) {
- // Evita problemi con stdout/stderr durante debug interattivo
- setvbuf(stdout, NULL, _IONBF, 0);
- setvbuf(stderr, NULL, _IONBF, 0);
- char strMqttMsg[50000] =
- "#.#NMEAS;MAC00158D00010A4C57;IDN56;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9CAE;LQI78;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER5;PW0900;PW1900;PW2900;TMP29;VCC3214;AD01;AD11;AD22;AD320;MOS4;#!##.#NMEAS;MAC00158D00011B1387;IDN70;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B138B;LQI150;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3183;AD01;AD11;AD21;AD3599;MOS1;#!##.#NMEAS;MAC00158D000109EDE4;IDN113;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B132B;LQI138;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3193;AD01;AD11;AD21;AD3599;MOS2;#!##.#NMEAS;MAC00158D000109EA5D;IDN48;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B1384;LQI45;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER3;PW0900;PW1900;PW2900;TMP29;VCC3180;AD02;AD12;AD22;AD320;MOS2;#!##.#NMEAS;MAC00158D00011B1327;IDN41;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D00011B9C7D;LQI168;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3187;AD01;AD12;AD22;AD3599;MOS4;#!##.#NMEAS;MAC00158D00011B132B;IDN23;FWV0036;HMS18:09:00;DOY01;MTY2;PAR00158D000109EA5B;LQI171;PKS0;PKR0;PKL0;VAC0;IAC0;PAT0;PRE0;CEA255;CER4;PW0900;PW1900;PW2900;TMP29;VCC3180;AD01;AD11;AD21;AD318;MOS2;#!#";
- kmlInfo.folder = "Lumi";
- kmlInfo.name = "HeatmapTest";
- LoadGeomapFile(GeomapFilePath);
- ReadDimmerFromMQTTMessage(strMqttMsg);
- int i;
- for (i = 0; i < numItems; i++) {
- printf("%s mac=%s pw1=%s\n", lampData[i].nome, lampData[i].macaddr, lampData[i].pw1);
- }
- }
- */
-
 int main(int argc, char *argv[]) {
 #ifdef DEBUG
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 #endif
 	parseArguments(argc, argv);
-	puts("mh-"VERSION" avviato - parametro ? per opzioni");
+	puts("mh-" VERSION " avviato - parametro ? per opzioni");
 
-	kmlInfo.folder = "luci";
+	kmlInfo.folder = "misure";
 	kmlInfo.name = "Heatmap";
 	LoadGeomapFile(geomapFilePath);
 
@@ -486,6 +440,6 @@ int main(int argc, char *argv[]) {
 	mosquitto_loop_stop(mosq, false);
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
-	printf("Servizio %s interrotto.\n", argv[0]);
+	printf("%s interrotto.\n", argv[0]);
 	return EXIT_SUCCESS;
 }
