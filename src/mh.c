@@ -29,6 +29,7 @@
 #endif
 
 #define MIN_DELAY 10
+#define MAC_SUFFIX_LEN 8
 
 /* valori di default */
 char *host = "127.0.0.1";
@@ -145,7 +146,7 @@ void LoadGeomapFile(const char *fpath) {
 
 /**
  * Ricerca binaria mediante puntatori per trovare un mac address (fonte: K&R)
- * Modificato per accettare un suffisso di 6 cifre invece del macaddress completo
+ * Modificato per accettare un suffisso di MAC_SUFFIX_LEN cifre invece del macaddress completo
  * @author Flavio
  *
  */
@@ -158,9 +159,9 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 	int skip = 0;
 	while (low < high) {
 		mid = low + (high - low) / 2;
-		if (strlen(macaddr) == 6) {
-			/* ricerca solo suffisso macaddr */
-			skip = 10;
+		if (strlen(macaddr) == MAC_SUFFIX_LEN) {
+			/* ricerca solo suffisso del macaddr */
+			skip = 16 - MAC_SUFFIX_LEN;
 		}
 		if ((cond = strcmp(macaddr, mid->macaddr + skip)) < 0) {
 			Log("[debug] %s < %s\n", macaddr, mid->macaddr + skip);
@@ -180,11 +181,10 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
  * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna LampData
  * @author Flavio
  */
-void ReadDimmerFromMQTTMessage(char data[]) {
+void parseMeasures(char *data) {
 	char macaddr[17];
 	int ad[2];
-	int n;
-	int k;
+	int n, k;
 	const char *pch = data;
 	/* ignora preambolo, legge MAC, salta piu' campi, legge AD0 e AD1; n = caratteri letti */
 	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
@@ -200,8 +200,8 @@ void ReadDimmerFromMQTTMessage(char data[]) {
 				lamp->ad[k] = ad[k];
 			}
 		}
+		pch += n;
 	}
-	pch += n;
 }
 
 /**
@@ -251,13 +251,13 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 	if (message->payload != NULL) {
 
 		char *payload = (char *) message->payload;
-		char *pch = message->topic + 91; /* confronto solo parte finale stringa usando aritmetica dei puntatori */
+		char *pch = message->topic + 91; /* confronto solo parte finale nome topic usando aritmetica dei puntatori */
 		char aResp[50];
 		char *resp = NULL;
 
 		if (strcmp(pch, axmj_in + 91) == 0) {
 			Log("[debug] Messaggio da axmj <= %s\n", payload);
-			ReadDimmerFromMQTTMessage(payload);
+			parseMeasures(payload);
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
 			Log("[debug] Messaggio da cmdin <= %s\n", payload);
 			/* todo split */
@@ -303,7 +303,7 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 						changed |= (lamp->ad[k] != v);
 						lamp->ad[k] = v;
 					}
-					// XXX tutti i mac in geomap, anche quelli non validi
+					// XXX setta tutti i mac in geomap, anche quelli non collegati
 					printf("AD%d (tutti) = %d\n", k, v);
 					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
@@ -349,9 +349,10 @@ static void parseArguments(int argc, char *argv[]) {
 	int i = argc;
 	while (--i) {
 		char * value = strchr(argv[i], ':') + 1;
-		/* legge il primo char */
+		/* legge il primo char di argv[i] */
 		switch (argv[i][0]) {
 		case '?':
+			puts("mh-" VERSION);
 			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) v(erbosity)");
 			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
 			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d v:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, mosq_log_levels);
@@ -394,8 +395,8 @@ int main(int argc, char *argv[]) {
 	setvbuf(stderr, NULL, _IONBF, 0);
 #endif
 	parseArguments(argc, argv);
+	/* VERSION deve contenere apici, nel Makefile va scritto VERSION=\"1.0.1\" */
 	puts("mh-" VERSION " avviato - parametro ? per opzioni");
-
 	kmlInfo.folder = "misure";
 	kmlInfo.name = "Heatmap";
 	LoadGeomapFile(geomapFilePath);
