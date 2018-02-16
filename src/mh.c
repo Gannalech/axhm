@@ -121,7 +121,9 @@ void LoadGeomapFile(const char *fpath) {
 								lampData[n].adc_coord2[1]) == 6; n++) {
 			strup(lampData[n].macaddr);
 			lampData[n].ad[0] = -1;
+			lampData[n].ad_bias[0] = 0;
 			lampData[n].ad[1] = -1;
+			lampData[n].ad_bias[1] = 0;
 			Log("[debug] %s %s\n", lampData[n].macaddr, lampData[n].nome);
 			/* controlla se mac address in ordine alfanumerico crescente */
 			if (strcmp(lastmac, lampData[n].macaddr) > 0) {
@@ -204,7 +206,7 @@ void parseMeasures(char *data) {
  * Callback per gestire i messaggi di log di mosquitto
  * @author Flavio
  */
-static void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *str) {
+static void log_callback(struct mosquitto *mosq, void *obj, int level, const char *str) {
 	/* Visualizza messaggi di log secondo flag in mosq_log_levels */
 	if (level & mosq_log_levels) {
 		puts(str);
@@ -215,7 +217,7 @@ static void my_log_callback(struct mosquitto *mosq, void *obj, int level, const 
  * Callback all'atto della connessione, effettua l'iscrizione ai topic
  * @author Flavio
  */
-static void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
+static void connect_callback(struct mosquitto *mosq, void *userdata, int rc) {
 	if (rc == 0) {
 		mosquitto_subscribe(mosq, NULL, axmj_in, 1); /* messaggi */
 		mosquitto_subscribe(mosq, NULL, cmd_in, 2); /* comandi */
@@ -229,7 +231,7 @@ static void my_connect_callback(struct mosquitto *mosq, void *userdata, int rc) 
  * Callback per ogni iscrizione ai topic
  * @author Flavio
  */
-static void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int qos_count, const int *granted_qos) {
+static void subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, int qos_count, const int *granted_qos) {
 	int i;
 	printf("Subscribe mid %d; qos %d", mid, granted_qos[0]);
 	for (i = 1; i < qos_count; i++) {
@@ -243,7 +245,7 @@ static void my_subscribe_callback(struct mosquitto *mosq, void *userdata, int mi
  * Callback per i messaggi ricevuti da mosquitto
  * @author Flavio
  */
-static void my_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
+static void message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
 	if (message->payload != NULL) {
 
 		char *payload = (char *) message->payload;
@@ -276,30 +278,34 @@ static void my_message_callback(struct mosquitto *mosq, void *userdata, const st
 					}
 				}
 			} else if (strncmp("SET-", payload, 4) == 0) {
-				// XXX il reset lato mh non risetta il contatore lato sensore
 				LampData *lamp;
 				int v;
 				int k;
 				char mac[17]; /* todo globale? */
-				int n = sscanf(payload, "SET-%d %u %16s", &k, &v, mac);
 				changed = false;
+				int n = sscanf(payload, "SET-%d %u %16s", &k, &v, mac);
 				if (n == 3) {
 					strup(mac);
 					lamp = binsearch_macaddr(mac, lampData, numItems);
+					// simulo reset contatori lato mh usando ad_bias
 					if (lamp != NULL) {
-						changed |= (lamp->ad[k] != v);
-						lamp->ad[k] = v;
-						printf("AD%d (%s) = %d\n", k, mac, v);
-						resp = "OK\r\n";
+						if (lamp->ad[k] == -1) {
+							resp = "NOVALUEYET\r\n";
+						} else {
+							changed |= (lamp->ad_bias[k] != v - lamp->ad[k]);
+							lamp->ad_bias[k] = lamp->ad[k] - v;
+							printf("AD%d (%s) = %d (bias %d)\n", k, mac, v, lamp->ad_bias[k]);
+							resp = "OK\r\n";
+						}
 					} else {
 						resp = "NOTFOUND\r\n";
 					}
 				} else if (n == 2) {
+					// setta tutti i mac in geomap, quelli offline non appariranno in Heatmap
 					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
-						changed |= (lamp->ad[k] != v);
-						lamp->ad[k] = v;
+						changed |= (lamp->ad[k] - lamp->ad_bias[k] != v);
+						lamp->ad_bias[k] = lamp->ad[k] - v;
 					}
-					// XXX setta tutti i mac in geomap, anche quelli non collegati
 					printf("AD%d (tutti) = %d\n", k, v);
 					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
@@ -402,10 +408,10 @@ int main(int argc, char *argv[]) {
 	if (!(mosq = mosquitto_new("MqttHeatmap", true/*clean_session*/, NULL))) {
 		err(EXIT_FAILURE, "Mosquitto_new failed");
 	}
-	mosquitto_log_callback_set(mosq, my_log_callback);
-	mosquitto_connect_callback_set(mosq, my_connect_callback);
-	mosquitto_message_callback_set(mosq, my_message_callback);
-	mosquitto_subscribe_callback_set(mosq, my_subscribe_callback);
+	mosquitto_log_callback_set(mosq, log_callback);
+	mosquitto_connect_callback_set(mosq, connect_callback);
+	mosquitto_message_callback_set(mosq, message_callback);
+	mosquitto_subscribe_callback_set(mosq, subscribe_callback);
 
 	if (mosquitto_connect(mosq, host, port, keepalive) != MOSQ_ERR_SUCCESS) {
 		err(EXIT_FAILURE, "Mosquitto_connect failed");

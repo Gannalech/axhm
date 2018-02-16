@@ -81,7 +81,7 @@ void write_kml(FILE* fp, KMLInfo* kml, LampData *item) {
 				TAG(DATA);
 				ATTR(NAME, "ADC");
 				TAG(VALUE);
-				snprintf(str, sizeof(str), "%d", item->ad[k]);
+				snprintf(str, sizeof(str), "%d", item->ad[k] - item->ad_bias[k]);
 				TEXT(str);
 				CTAG();
 				CTAG();
