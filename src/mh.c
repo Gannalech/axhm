@@ -39,10 +39,6 @@ static char *heatmapFilePath = "/www/Heatmap/Scripts/Heatmap.kml";
 static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
 
-extern KMLInfo kmlInfo;
-extern LampData lampData[];
-extern int numItems;
-
 static volatile sig_atomic_t running = 1;
 
 time_t timeLastSaved;

@@ -20,9 +20,9 @@ typedef struct {
 
 #define MAX_LAMPS 150
 
-LampData lampData[MAX_LAMPS];
-KMLInfo kmlInfo;
-int numItems;
+extern KMLInfo kmlInfo;
+extern LampData lampData[];
+extern int numItems;
 
 void write_kml(FILE *fp, KMLInfo *kml, LampData *item);
 int WriteKMLFile(char* fname);

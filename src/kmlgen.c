@@ -30,9 +30,9 @@ static char* FOLDER = "Folder";
 static char* NAME = "name";
 static char* KML = "kml";
 
-extern KMLInfo kmlInfo;
-extern LampData lampData[];
-extern int numItems;
+LampData lampData[MAX_LAMPS];
+KMLInfo kmlInfo;
+int numItems;
 
 static int i, k;
 
