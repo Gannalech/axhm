@@ -38,6 +38,7 @@ int keepalive = 60;
 static char *heatmapFilePath = "/www/Heatmap/Scripts/Heatmap.kml";
 static char *geomapFilePath = "/www/Geomap.txt";
 unsigned int saveDelay = MIN_DELAY; /* pausa minima tra due salvataggi (in secondi) */
+int mosq_log_levels = MOSQ_LOG_ERR | MOSQ_LOG_INFO | MOSQ_LOG_WARNING;
 
 static volatile sig_atomic_t running = 1;
 
@@ -46,17 +47,21 @@ bool changed = true; /* arrivata misura nuova rispetto al KML salvato, se gia' c
 bool writekml = true; /* scrive il file KML */
 
 struct mosquitto *mosq = NULL;
-int mosq_log_levels = MOSQ_LOG_ERR | MOSQ_LOG_INFO | MOSQ_LOG_WARNING;
 
 /* topic */
 char *axmj_in = "/axlight/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/axmj/";
 char *cmd_in = "/axmh/f48e30d0-566f-4524-9130-1d65f17d8a53/stc/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdin/";
 char *cmd_out = "/axmh/f48e30d0-566f-4524-9130-1d65f17d8a53/cts/nde/8ee098b5-c24b-43c3-9bf3-869a4302adef/cmdout/";
 
+/* risposte standard cmd_out */
+static char * const S_ERR = "ERR\r\n";
+static char * const S_OK = "OK\r\n";
+
 /** Macro per i messaggi diagnostici */
 #define DEBUG
 #ifdef DEBUG
-#define Log(...) printf(__VA_ARGS__)
+#define Log(level,...) \
+	do {if (mosq_log_levels & level) printf(__VA_ARGS__); } while(0)
 #else
 #define Log(...) /* NOP */
 #endif
@@ -124,7 +129,7 @@ void LoadGeomapFile(const char *fpath) {
 			lampData[n].ad_bias[0] = 0;
 			lampData[n].ad[1] = -1;
 			lampData[n].ad_bias[1] = 0;
-			Log("[debug] %s %s\n", lampData[n].macaddr, lampData[n].nome);
+			Log(MOSQ_LOG_INFO, "[LoadGeomapFile] %s %s\n", lampData[n].macaddr, lampData[n].nome);
 			/* controlla se mac address in ordine alfanumerico crescente */
 			if (strcmp(lastmac, lampData[n].macaddr) > 0) {
 				ordered = false;
@@ -135,7 +140,7 @@ void LoadGeomapFile(const char *fpath) {
 		fclose(fp);
 		if (!ordered) {
 			qsort(lampData, numItems, sizeof(*lampData), comp);
-			Log("Voci Geomap riordinate per mac address crescente\n");
+			puts("Voci Geomap riordinate per mac address crescente");
 		}
 	} else {
 		err(EXIT_FAILURE, "File Geomap mancante: %s", fpath);
@@ -148,7 +153,7 @@ void LoadGeomapFile(const char *fpath) {
  * @author Flavio
  *
  */
-LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
+LampData *bsearch_mac(const char *macaddr, LampData *lamp, int n) {
 	int cond;
 	LampData *low = &lamp[0];
 	LampData *high = &lamp[n];
@@ -162,13 +167,13 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
 			skip = 16 - MAC_SUFFIX_LEN;
 		}
 		if ((cond = strcmp(macaddr, mid->macaddr + skip)) < 0) {
-			Log("[debug] %s < %s\n", macaddr, mid->macaddr + skip);
+			Log(MOSQ_LOG_INFO, "[bsearch_mac] %s < %s\n", macaddr, mid->macaddr + skip);
 			high = mid;
 		} else if (cond > 0) {
-			Log("[debug] %s > %s\n", macaddr, mid->macaddr + skip);
+			Log(MOSQ_LOG_INFO, "[bsearch_mac] %s > %s\n", macaddr, mid->macaddr + skip);
 			low = mid + 1;
 		} else {
-			Log("[debug] trovo: %s\n", mid->macaddr);
+			Log(MOSQ_LOG_INFO, "[bsearch_mac] trovo: %s\n", mid->macaddr);
 			return mid;
 		}
 	}
@@ -179,7 +184,7 @@ LampData *binsearch_macaddr(const char *macaddr, LampData *lamp, int n) {
  * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna LampData
  * @author Flavio
  */
-void parseMeasures(char *data) {
+void parse_axmj(char *data) {
 	char macaddr[17];
 	int ad[2];
 	int n, k;
@@ -189,12 +194,12 @@ void parseMeasures(char *data) {
 	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];AD0%5d;AD1%5d;%*[^#!|]%n", macaddr, &ad[0],
 			&ad[1], &n) == 3) {
 		strup(macaddr);
-		Log("[debug] Cerco %s\n", macaddr);
-		LampData *lamp = binsearch_macaddr(macaddr, lampData, numItems);
+		Log(MOSQ_LOG_INFO, "[parse_axmj] Cerco %s\n", macaddr);
+		LampData *lamp = bsearch_mac(macaddr, lampData, numItems);
 		if (lamp != NULL) {
 			for (k = 0; k < 2; k++) {
-				Log("[debug] AD%d di %s = %d (era %d)\n", k, macaddr, ad[k], lamp->ad[k]);
-				changed = (lamp->ad[k] != ad[k]); /* aggiorna solo se diverso */
+				Log(MOSQ_LOG_INFO, "[parse_axmj] AD%d di %s = %d (era %d)\n", k, macaddr, ad[k], lamp->ad[k]);
+				changed |= (lamp->ad[k] != ad[k]); /* aggiorna solo se uno diverso */
 				lamp->ad[k] = ad[k];
 			}
 		}
@@ -251,22 +256,20 @@ static void message_callback(struct mosquitto *mosq, void *userdata, const struc
 		char *payload = (char *) message->payload;
 		char *pch = message->topic + 91; /* confronto solo parte finale nome topic usando aritmetica dei puntatori */
 		char aResp[50];
-		char *resp = NULL;
+		char * resp = S_OK; // default
 
 		if (strcmp(pch, axmj_in + 91) == 0) {
-			Log("[debug] Messaggio da axmj <= %s\n", payload);
-			parseMeasures(payload);
+			Log(MOSQ_LOG_INFO, "[debug] Messaggio da axmj <= %s\n", payload);
+			parse_axmj(payload);
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
-			Log("[debug] Messaggio da cmdin <= %s\n", payload);
-			/* todo split */
+			Log(MOSQ_LOG_INFO, "[debug] Messaggio da cmdin <= %s\n", payload);
+			strup(payload); // CONVERTE IN UPPERCASE
 			if (strncmp("OFF", payload, 4) == 0) {
 				writekml = false;
 				fputs("\nGenerazione kml sospesa\n", stdout);
-				resp = "OK\r\n";
 			} else if (strncmp("ON", payload, 2) == 0) {
 				writekml = true;
 				fputs("\nGenerazione kml attiva\n", stdout);
-				resp = "OK\r\n";
 				char * sVal = strchr(payload, ' ');
 				if (sVal != NULL) {
 					unsigned int val = parseAsInteger(++sVal);
@@ -274,28 +277,29 @@ static void message_callback(struct mosquitto *mosq, void *userdata, const struc
 						saveDelay = val;
 						printf("KML ricreato ogni %u secondi (se vi sono valori nuovi)\n", val);
 					} else {
-						resp = "ERR\r\n";
+						resp = S_ERR;
 					}
 				}
 			} else if (strncmp("SET-", payload, 4) == 0) {
 				LampData *lamp;
-				int v;
+				int adc;
 				int k;
+				int bias;
 				char mac[17]; /* todo globale? */
 				changed = false;
-				int n = sscanf(payload, "SET-%d %u %16s", &k, &v, mac);
+				int n = sscanf(payload, "SET-%d %u %16s", &k, &adc, mac);
 				if (n == 3) {
-					strup(mac);
-					lamp = binsearch_macaddr(mac, lampData, numItems);
-					// simulo reset contatori lato mh usando ad_bias
+					//strup(mac);
+					lamp = bsearch_mac(mac, lampData, numItems);
+					// simulo reset contatori usando ad_bias lato mh
 					if (lamp != NULL) {
 						if (lamp->ad[k] == -1) {
 							resp = "NOVALUEYET\r\n";
 						} else {
-							changed |= (lamp->ad_bias[k] != v - lamp->ad[k]);
-							lamp->ad_bias[k] = lamp->ad[k] - v;
-							printf("AD%d (%s) = %d (bias %d)\n", k, mac, v, lamp->ad_bias[k]);
-							resp = "OK\r\n";
+							bias = lamp->ad[k] - adc;
+							changed |= (lamp->ad_bias[k] != bias);
+							lamp->ad_bias[k] = bias;
+							printf("AD%d (%s) = %d (bias %d)\n", k, mac, adc, bias);
 						}
 					} else {
 						resp = "NOTFOUND\r\n";
@@ -303,14 +307,15 @@ static void message_callback(struct mosquitto *mosq, void *userdata, const struc
 				} else if (n == 2) {
 					// setta tutti i mac in geomap, quelli offline non appariranno in Heatmap
 					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
-						changed |= (lamp->ad[k] - lamp->ad_bias[k] != v);
-						lamp->ad_bias[k] = lamp->ad[k] - v;
+						bias = lamp->ad[k] - adc;
+						changed |= (lamp->ad_bias[k] != bias);
+						lamp->ad_bias[k] = bias;
 					}
-					printf("AD%d (tutti) = %d\n", k, v);
+					printf("AD%d (tutti) = %d\n", k, adc);
 					sprintf(aResp, "OK %d\r\n", numItems);
 					resp = aResp;
 				} else {
-					resp = "ERR\r\n";
+					resp = S_ERR;
 				}
 			} else if (strncmp("GETSTATUS", payload, 10) == 0) {
 				sprintf(aResp, (writekml ? "ON %u\r\n" : "OFF\r\n"), saveDelay);
@@ -319,10 +324,10 @@ static void message_callback(struct mosquitto *mosq, void *userdata, const struc
 				resp = "OFF\r\nON\r\nGETSTATUS\r\nSET-<indice> <valorecontatore> <macaddr>\r\n";
 			}
 		} else {
-			Log("[debug] Ignorato messaggio da %s <= %s\n", message->topic, payload);
+			Log(MOSQ_LOG_INFO, "[message_callback] Ignorato messaggio da %s <= %s\n", message->topic, payload);
 		}
 		if (resp != NULL) {
-			Log("[debug] Risposta => %s", resp);
+			Log(MOSQ_LOG_INFO, "[message_callback] Risposta => %s", resp);
 			mosquitto_publish(mosq, NULL, cmd_out, strlen(resp), resp, 0, false);
 		}
 	}
@@ -354,7 +359,7 @@ static void parseArguments(int argc, char *argv[]) {
 		/* legge il primo char di argv[i] */
 		switch (argv[i][0]) {
 		case '?':
-			puts("mh-" VERSION);
+			puts("MqttHeatmap " VERSION);
 			puts("Parametri: h(ost) p(ort) k(eepalive) i(nput_geomap) o(utput_heatmap) r(efresh_sec) v(erbosity)");
 			puts("Tutti opzionali. Usare solo il carattere minuscolo iniziale, poi : ed il valore.");
 			printf("Default: h:%s p:%d k:%d i:%s o:%s r:%d v:%d\n", host, port, keepalive, geomapFilePath, heatmapFilePath, saveDelay, mosq_log_levels);
@@ -397,7 +402,7 @@ int main(int argc, char *argv[]) {
 	setvbuf(stderr, NULL, _IONBF, 0);
 #endif
 	parseArguments(argc, argv);
-	/* VERSION deve contenere apici, nel Makefile va scritto VERSION=\"1.0.1\" */
+	/* VERSION deve contenere apici, nel Makefile va scritto ad es. VERSION=\"1.0.1\" */
 	puts("mh-" VERSION " avviato - parametro ? per opzioni");
 	kmlInfo.folder = "misure";
 	kmlInfo.name = "Heatmap";
