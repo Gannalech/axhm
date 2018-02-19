@@ -167,10 +167,10 @@ LampData *bsearch_mac(const char *macaddr, LampData *lamp, int n) {
 			skip = 16 - MAC_SUFFIX_LEN;
 		}
 		if ((cond = strcmp(macaddr, mid->macaddr + skip)) < 0) {
-			Log(MOSQ_LOG_INFO, "[bsearch_mac] %s < %s\n", macaddr, mid->macaddr + skip);
+			Log(MOSQ_LOG_DEBUG, "[bsearch_mac] %s < %s\n", macaddr, mid->macaddr + skip);
 			high = mid;
 		} else if (cond > 0) {
-			Log(MOSQ_LOG_INFO, "[bsearch_mac] %s > %s\n", macaddr, mid->macaddr + skip);
+			Log(MOSQ_LOG_DEBUG, "[bsearch_mac] %s > %s\n", macaddr, mid->macaddr + skip);
 			low = mid + 1;
 		} else {
 			Log(MOSQ_LOG_INFO, "[bsearch_mac] trovo: %s\n", mid->macaddr);
@@ -259,10 +259,10 @@ static void message_callback(struct mosquitto *mosq, void *userdata, const struc
 		char * resp = S_OK; // default
 
 		if (strcmp(pch, axmj_in + 91) == 0) {
-			Log(MOSQ_LOG_INFO, "[debug] Messaggio da axmj <= %s\n", payload);
+			Log(MOSQ_LOG_DEBUG, "[message_callback] Messaggio da axmj <= %s\n", payload);
 			parse_axmj(payload);
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
-			Log(MOSQ_LOG_INFO, "[debug] Messaggio da cmdin <= %s\n", payload);
+			Log(MOSQ_LOG_DEBUG, "[message_callback] Messaggio da cmdin <= %s\n", payload);
 			strup(payload); // CONVERTE IN UPPERCASE
 			if (strncmp("OFF", payload, 4) == 0) {
 				writekml = false;
