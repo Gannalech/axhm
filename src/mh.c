@@ -28,8 +28,9 @@
 #define VERSION "SNAPSHOT"
 #endif
 
-#define MIN_DELAY 10
-#define MAC_SUFFIX_LEN 8
+#define MIN_DELAY	10
+#define MAC_SUFFIX_LEN	8
+#define NOVALUEYET	-1
 
 /* valori di default */
 char *host = "127.0.0.1";
@@ -42,7 +43,7 @@ int mosq_log_levels = MOSQ_LOG_ERR | MOSQ_LOG_INFO | MOSQ_LOG_WARNING;
 
 static volatile sig_atomic_t running = 1;
 
-time_t timeLastSaved;
+time_t timeLastSaved = 0;
 bool changed = true; /* arrivata misura nuova rispetto al KML salvato, se gia' creato */
 bool writekml = true; /* scrive il file KML */
 
@@ -125,11 +126,11 @@ void LoadGeomapFile(const char *fpath) {
 						&& fscanf(fp, "%*6[^;];%35[^;];%16[^;];%20[^;];%20[^;];%20[^;];%20[^|;]|", lampData[n].nome, lampData[n].macaddr, lampData[n].adc_coord1[0], lampData[n].adc_coord2[0], lampData[n].adc_coord1[1],
 								lampData[n].adc_coord2[1]) == 6; n++) {
 			strup(lampData[n].macaddr);
-			lampData[n].ad[0] = -1;
+			lampData[n].ad[0] = NOVALUEYET;
 			lampData[n].ad_bias[0] = 0;
-			lampData[n].ad[1] = -1;
+			lampData[n].ad[1] = NOVALUEYET;
 			lampData[n].ad_bias[1] = 0;
-			Log(MOSQ_LOG_INFO, "[LoadGeomapFile] %s %s\n", lampData[n].macaddr, lampData[n].nome);
+			Log(MOSQ_LOG_INFO, "Geomap: %s %s\n", lampData[n].macaddr, lampData[n].nome);
 			/* controlla se mac address in ordine alfanumerico crescente */
 			if (strcmp(lastmac, lampData[n].macaddr) > 0) {
 				ordered = false;
@@ -167,44 +168,17 @@ LampData *bsearch_mac(const char *macaddr, LampData *lamp, int n) {
 			skip = 16 - MAC_SUFFIX_LEN;
 		}
 		if ((cond = strcmp(macaddr, mid->macaddr + skip)) < 0) {
-			Log(MOSQ_LOG_DEBUG, "[bsearch_mac] %s < %s\n", macaddr, mid->macaddr + skip);
+			Log(MOSQ_LOG_DEBUG, "Confronto %s < %s\n", macaddr, mid->macaddr + skip);
 			high = mid;
 		} else if (cond > 0) {
-			Log(MOSQ_LOG_DEBUG, "[bsearch_mac] %s > %s\n", macaddr, mid->macaddr + skip);
+			Log(MOSQ_LOG_DEBUG, "Confronto %s > %s\n", macaddr, mid->macaddr + skip);
 			low = mid + 1;
 		} else {
-			Log(MOSQ_LOG_INFO, "[bsearch_mac] trovo: %s\n", mid->macaddr);
+			Log(MOSQ_LOG_INFO, "Trovato %s\n", mid->macaddr);
 			return mid;
 		}
 	}
 	return NULL;
-}
-
-/**
- * Estrapola il mac address di ogni misura ricevuta, se presente tra le lampade di interesse aggiorna LampData
- * @author Flavio
- */
-void parse_axmj(char *data) {
-	char macaddr[17];
-	int ad[2];
-	int n, k;
-	const char *pch = data;
-	/* ignora preambolo, legge MAC, salta piu' campi, legge AD0 e AD1; n = caratteri letti */
-	/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
-	while (sscanf(pch, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];AD0%5d;AD1%5d;%*[^#!|]%n", macaddr, &ad[0],
-			&ad[1], &n) == 3) {
-		strup(macaddr);
-		Log(MOSQ_LOG_INFO, "[parse_axmj] Cerco %s\n", macaddr);
-		LampData *lamp = bsearch_mac(macaddr, lampData, numItems);
-		if (lamp != NULL) {
-			for (k = 0; k < 2; k++) {
-				Log(MOSQ_LOG_INFO, "[parse_axmj] AD%d di %s = %d (era %d)\n", k, macaddr, ad[k], lamp->ad[k]);
-				changed |= (lamp->ad[k] != ad[k]); /* aggiorna solo se uno diverso */
-				lamp->ad[k] = ad[k];
-			}
-		}
-		pch += n;
-	}
 }
 
 /**
@@ -252,60 +226,76 @@ static void subscribe_callback(struct mosquitto *mosq, void *userdata, int mid, 
  */
 static void message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message) {
 	if (message->payload != NULL) {
-
-		char *payload = (char *) message->payload;
-		char *pch = message->topic + 91; /* confronto solo parte finale nome topic usando aritmetica dei puntatori */
+		char macaddr[17];
+		int ad[2], bias;
+		int n, k, adc;
+		LampData *lamp;
 		char aResp[50];
 		char * resp = S_OK; // default
 
+		char *payload = (char *) message->payload;
+		char *pch = message->topic + 91; /* confronto solo parte finale nome topic usando aritmetica dei puntatori */
 		if (strcmp(pch, axmj_in + 91) == 0) {
-			Log(MOSQ_LOG_DEBUG, "[message_callback] Messaggio da axmj <= %s\n", payload);
-			parse_axmj(payload);
+			/*
+			 * Estrapola il mac address di ogni misura ricevuta da topic, se presente tra le lampade di interesse aggiorna LampData
+			 */
+			Log(MOSQ_LOG_DEBUG, " Messaggio da axmj <= %s\n", payload);
+			/* ignora preambolo, legge MAC, salta piu' campi, legge AD0 e AD1; n = caratteri letti */
+			/* NOTA: aggiunto pipe (|) per accettare messaggi axmj fuori specifica */
+			while (sscanf(payload, "%*[#.!|]NMEAS;MAC%16[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];%*[^;];AD0%5d;AD1%5d;%*[^#!|]%n",
+					macaddr, &ad[0], &ad[1], &n) == 3) {
+				strup(macaddr);
+				Log(MOSQ_LOG_DEBUG, "Cerco %s\n", macaddr);
+				if ((lamp = bsearch_mac(macaddr, lampData, numItems)) != NULL) {
+					for (int k = 0; k < 2; k++) {
+						Log(MOSQ_LOG_INFO, "AD%d di %s = %d (era %d)\n", k, macaddr, ad[k], lamp->ad[k]);
+						changed |= (lamp->ad[k] != ad[k]); /* aggiorna solo se uno diverso */
+						lamp->ad[k] = ad[k];
+					}
+				}
+				payload += n;
+			}
 		} else if (strcmp(pch, cmd_in + 91) == 0) {
-			Log(MOSQ_LOG_DEBUG, "[message_callback] Messaggio da cmdin <= %s\n", payload);
+			/*
+			 * Elabora il comando ricevuto da topic
+			 */
+			Log(MOSQ_LOG_DEBUG, " Messaggio da cmdin <= %s\n", payload);
 			strup(payload); // CONVERTE IN UPPERCASE
 			if (strncmp("OFF", payload, 4) == 0) {
 				writekml = false;
-				fputs("\nGenerazione kml sospesa\n", stdout);
+				fputs("Scrittura KML sospesa\n", stdout);
 			} else if (strncmp("ON", payload, 2) == 0) {
 				writekml = true;
-				fputs("\nGenerazione kml attiva\n", stdout);
+				fputs("Scrittura KML attiva\n", stdout);
 				char * sVal = strchr(payload, ' ');
 				if (sVal != NULL) {
 					unsigned int val = parseAsInteger(++sVal);
 					if (validSaveDelay(val)) {
 						saveDelay = val;
-						printf("KML ricreato ogni %u secondi (se vi sono valori nuovi)\n", val);
+						printf("KML aggiornato ogni %u secondi\n", val);
 					} else {
 						resp = S_ERR;
 					}
 				}
 			} else if (strncmp("SET-", payload, 4) == 0) {
-				LampData *lamp;
-				int adc;
-				int k;
-				int bias;
-				char mac[17]; /* todo globale? */
 				changed = false;
-				int n = sscanf(payload, "SET-%d %u %16s", &k, &adc, mac);
+				int n = sscanf(payload, "SET-%d %u %16s", &k, &adc, macaddr);
 				if (n == 3) {
-					//strup(mac);
-					lamp = bsearch_mac(mac, lampData, numItems);
 					// simulo reset contatori usando ad_bias lato mh
-					if (lamp != NULL) {
-						if (lamp->ad[k] == -1) {
+					if ((lamp = bsearch_mac(macaddr, lampData, numItems)) != NULL) {
+						if (lamp->ad[k] == NOVALUEYET) {
 							resp = "NOVALUEYET\r\n";
 						} else {
 							bias = lamp->ad[k] - adc;
 							changed |= (lamp->ad_bias[k] != bias);
 							lamp->ad_bias[k] = bias;
-							printf("AD%d (%s) = %d (bias %d)\n", k, mac, adc, bias);
+							printf("AD%d (%s) = %d (bias %d)\n", k, macaddr, adc, bias);
 						}
 					} else {
 						resp = "NOTFOUND\r\n";
 					}
 				} else if (n == 2) {
-					// setta tutti i mac in geomap, quelli offline non appariranno in Heatmap
+					// setta tutti i macaddr in geomap, quelli offline non appariranno in Heatmap
 					for (lamp = lampData; lamp < lampData + numItems; lamp++) {
 						bias = lamp->ad[k] - adc;
 						changed |= (lamp->ad_bias[k] != bias);
@@ -317,17 +307,17 @@ static void message_callback(struct mosquitto *mosq, void *userdata, const struc
 				} else {
 					resp = S_ERR;
 				}
-			} else if (strncmp("GETSTATUS", payload, 10) == 0) {
+			} else if (strncmp("STATUS", payload, 7) == 0) {
 				sprintf(aResp, (writekml ? "ON %u\r\n" : "OFF\r\n"), saveDelay);
 				resp = aResp;
 			} else if (strncmp("?", payload, 2) == 0) {
-				resp = "OFF\r\nON\r\nGETSTATUS\r\nSET-<indice> <valorecontatore> <macaddr>\r\n";
+				resp = "OFF\r\nON\r\nSTATUS\r\nSET-<indice> <valorecontatore> <macaddr>\r\n";
 			}
 		} else {
-			Log(MOSQ_LOG_INFO, "[message_callback] Ignorato messaggio da %s <= %s\n", message->topic, payload);
+			Log(MOSQ_LOG_DEBUG, " Ignorato messaggio da %s <= %s\n", message->topic, payload);
 		}
 		if (resp != NULL) {
-			Log(MOSQ_LOG_INFO, "[message_callback] Risposta => %s", resp);
+			Log(MOSQ_LOG_DEBUG, " Risposta => %s", resp);
 			mosquitto_publish(mosq, NULL, cmd_out, strlen(resp), resp, 0, false);
 		}
 	}
@@ -431,9 +421,6 @@ int main(int argc, char *argv[]) {
 	if (signal(SIGTERM, sig_handler) == SIG_ERR) {
 		puts("Cannot catch SIGTERM ...");
 	}
-
-	changed = true;
-	timeLastSaved = 0;
 
 	while (running) {
 		/* se ci sono misure nuove e scrittura kml e' attiva e tempo da ultimo salvataggio superiore a intervallo minimo in secondi */
